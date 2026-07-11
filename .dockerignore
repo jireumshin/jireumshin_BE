@@ -1,0 +1,12 @@
+node_modules
+dist
+.git
+.yarn/cache
+.yarn/install-state.gz
+.env
+.env.*
+!.env.example
+*.log
+npm-debug.log*
+yarn-error.log
+.DS_Store

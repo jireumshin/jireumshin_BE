@@ -1,0 +1,17 @@
+node_modules
+dist
+.env
+.env.local
+*.log
+npm-debug.log*
+yarn-error.log
+.DS_Store
+
+# Yarn Berry (node-modules linker)
+.yarn/*
+!.yarn/patches
+!.yarn/releases
+!.yarn/plugins
+.pnp.*
+
+/docs/
