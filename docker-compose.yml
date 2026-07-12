@@ -1,6 +1,8 @@
 services:
   api:
-    build: .
+    # CI(GitHub Actions)에서 빌드해 ECR에 올린 이미지를 EC2가 pull
+    # 로컬에서 도커로 빌드하려면 docker-compose.override.yml(gitignore)에 build: . 추가
+    image: 121913092463.dkr.ecr.ap-northeast-2.amazonaws.com/jireumshin-be:latest
     ports:
       - '4000:4000'
     environment:
