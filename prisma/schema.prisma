@@ -1,0 +1,30 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum TrialStatus {
+  PENDING // 심리 중
+  JUDGED // 판결 완료
+}
+
+enum Verdict {
+  GUILTY // 유죄 = 사지 마
+  NOT_GUILTY // 무죄 = 사도 됨
+}
+
+model Trial {
+  id        String      @id @default(cuid())
+  itemName  String
+  price     Int
+  reason    String?
+  imageUrl  String?
+  status    TrialStatus @default(PENDING)
+  verdict   Verdict?
+  createdAt DateTime    @default(now())
+  updatedAt DateTime    @updatedAt
+}

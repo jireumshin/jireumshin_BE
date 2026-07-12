@@ -7,6 +7,7 @@ COPY package.json yarn.lock .yarnrc.yml ./
 RUN yarn install --immutable
 
 COPY . .
+RUN yarn prisma generate
 RUN yarn build
 
 # ---------- production stage ----------
@@ -18,7 +19,11 @@ RUN corepack enable
 COPY package.json yarn.lock .yarnrc.yml ./
 RUN yarn install --immutable
 
+COPY prisma ./prisma
+RUN yarn prisma generate
+
 COPY --from=builder /app/dist ./dist
 
 EXPOSE 4000
-CMD ["node", "dist/main"]
+# 컨테이너 시작 시 마이그레이션 적용 후 서버 기동 (프로덕션은 RDS로 migrate deploy)
+CMD ["sh", "-c", "yarn prisma migrate deploy && node dist/main"]

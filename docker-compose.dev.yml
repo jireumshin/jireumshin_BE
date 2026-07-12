@@ -1,0 +1,16 @@
+# 로컬 개발용 Postgres (앱은 yarn start:dev로 실행, DB만 컨테이너로)
+# 사용: docker compose -f docker-compose.dev.yml up -d
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: jireumshin
+    ports:
+      - '5432:5432'
+    volumes:
+      - jireumshin_pgdata:/var/lib/postgresql/data
+
+volumes:
+  jireumshin_pgdata:
