@@ -52,6 +52,8 @@ jobs:
           SCRIPT="set -e
           cd $EC2_DEPLOY_DIR
           aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin $REGISTRY
+          docker compose down --remove-orphans || true
+          docker image prune -af
           docker compose pull
           docker compose up -d
           docker image prune -f"
