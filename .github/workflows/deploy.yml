@@ -49,14 +49,23 @@ jobs:
           INSTANCE_ID: ${{ secrets.EC2_INSTANCE_ID }}
         run: |
           # EC2에서 실행할 배포 스크립트 (인스턴스 역할로 ECR 인증 → pull → 재기동)
+          # 정리를 login보다 앞에 둔다: login은 자격증명을 디스크에 쓰므로 여유가 0이면 여기서 죽고,
+          # 그러면 공간을 비워주는 뒷 단계에 도달하지 못해 스스로 복구할 수 없다.
+          # 이 단계는 실행 중 컨테이너를 건드리지 않는다(사용 중 이미지는 prune 대상이 아님).
           SCRIPT="set -e
           cd $EC2_DEPLOY_DIR
+          echo '--- disk before ---'; df -h / | tail -1
+          docker image prune -af || true
+          docker builder prune -af || true
+          sudo apt-get clean || true
+          echo '--- disk after cleanup ---'; df -h / | tail -1
           aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin $REGISTRY
           docker compose down --remove-orphans || true
           docker image prune -af
           docker compose pull
           docker compose up -d
-          docker image prune -f"
+          docker image prune -f
+          echo '--- disk after deploy ---'; df -h / | tail -1"
           PARAMS=$(jq -n --arg s "$SCRIPT" '{commands: [$s]}')
 
           CMD_ID=$(aws ssm send-command \
