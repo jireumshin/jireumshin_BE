@@ -6,8 +6,18 @@ services:
     ports:
       - '4000:4000'
     environment:
+      NODE_ENV: ${NODE_ENV:-production}
       PORT: 4000
       CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost:3000}
       DATABASE_URL: ${DATABASE_URL}
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_EXPIRES_IN: ${JWT_EXPIRES_IN:-7d}
+      COOKIE_DOMAIN: ${COOKIE_DOMAIN}
+      APP_URL: ${APP_URL:-https://www.jireumshin.shop}
+      SMTP_HOST: ${SMTP_HOST}
+      SMTP_PORT: ${SMTP_PORT:-465}
+      SMTP_USER: ${SMTP_USER}
+      SMTP_PASS: ${SMTP_PASS}
+      MAIL_FROM: ${MAIL_FROM}
     restart: unless-stopped
 # DB(Postgres)는 Prisma 붙이는 단계에서 추가 예정

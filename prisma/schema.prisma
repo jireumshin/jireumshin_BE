@@ -7,6 +7,36 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+enum AuthProvider {
+  LOCAL // 이메일/비밀번호 가입
+  KAKAO // 카카오 소셜 로그인
+}
+
+model User {
+  id         String       @id @default(cuid())
+  email      String       @unique // 로그인 ID
+  nickname   String       @unique // 표시 이름
+  password   String? // bcrypt 해시 (카카오 로그인은 없음)
+  provider   AuthProvider @default(LOCAL)
+  providerId String? // 카카오 고유 id (소셜 로그인 조회용)
+  createdAt  DateTime     @default(now())
+  updatedAt  DateTime     @updatedAt
+
+  resetTokens PasswordResetToken[]
+}
+
+model PasswordResetToken {
+  id        String    @id @default(cuid())
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash String // 토큰 원문은 저장하지 않고 해시만 보관
+  expiresAt DateTime
+  usedAt    DateTime? // 사용되면 기록 (재사용 방지)
+  createdAt DateTime  @default(now())
+
+  @@index([userId])
+}
+
 enum TrialStatus {
   PENDING // 심리 중
   JUDGED // 판결 완료
