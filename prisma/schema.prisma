@@ -14,11 +14,11 @@ enum AuthProvider {
 
 model User {
   id         String       @id @default(cuid())
-  email      String       @unique // 로그인 ID
+  email      String?      @unique // 로그인 ID (카카오는 이메일 동의를 거부할 수 있어 nullable)
   nickname   String       @unique // 표시 이름
   password   String? // bcrypt 해시 (카카오 로그인은 없음)
-  provider   AuthProvider @default(LOCAL)
-  providerId String? // 카카오 고유 id (소셜 로그인 조회용)
+  provider   AuthProvider @default(LOCAL) // 최초 가입 경로
+  providerId String?      @unique // 카카오 고유 id (LOCAL 계정에 연동돼도 채워짐)
   createdAt  DateTime     @default(now())
   updatedAt  DateTime     @updatedAt
 

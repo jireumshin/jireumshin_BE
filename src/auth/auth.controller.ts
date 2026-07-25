@@ -4,27 +4,38 @@ import {
   Get,
   HttpCode,
   Post,
+  Query,
   Req,
   Res,
   UseGuards,
 } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
 import type { Request, Response } from 'express';
+import * as crypto from 'crypto';
 import { AuthService } from './auth.service';
+import { KakaoService } from './kakao.service';
 import { SignupDto } from './dto/signup.dto';
 import { LoginDto } from './dto/login.dto';
 import { ResetPasswordDto, ResetRequestDto } from './dto/reset-password.dto';
 import { JwtAuthGuard } from './jwt-auth.guard';
 import {
   ACCESS_TOKEN_COOKIE,
+  OAUTH_STATE_COOKIE,
   accessTokenCookieOptions,
   clearCookieOptions,
+  clearOauthStateCookieOptions,
+  oauthStateCookieOptions,
 } from './cookie.util';
 
 @ApiTags('auth')
 @Controller('auth')
 export class AuthController {
-  constructor(private readonly authService: AuthService) {}
+  constructor(
+    private readonly authService: AuthService,
+    private readonly kakaoService: KakaoService,
+    private readonly config: ConfigService,
+  ) {}
 
   @Post('signup')
   @ApiOperation({ summary: '회원가입 (가입 후 자동 로그인)' })
@@ -85,5 +96,47 @@ export class AuthController {
   async resetPassword(@Body() dto: ResetPasswordDto) {
     await this.authService.resetPassword(dto.token, dto.newPassword);
     return { success: true };
+  }
+
+  @Get('kakao')
+  @ApiOperation({ summary: '카카오 인증 페이지로 리다이렉트' })
+  kakaoStart(@Res() res: Response) {
+    const state = crypto.randomBytes(16).toString('hex');
+    res.cookie(OAUTH_STATE_COOKIE, state, oauthStateCookieOptions());
+    res.redirect(this.kakaoService.buildAuthorizeUrl(state));
+  }
+
+  @Get('kakao/callback')
+  @ApiOperation({
+    summary: '카카오 콜백 — 토큰 발급 후 프론트로 리다이렉트',
+    description:
+      '실패해도 JSON을 반환하지 않고 프론트 로그인 화면으로 되돌려보낸다(브라우저 이동 흐름이므로).',
+  })
+  async kakaoCallback(
+    @Req() req: Request,
+    @Res() res: Response,
+    @Query('code') code?: string,
+    @Query('state') state?: string,
+  ) {
+    const appUrl = (
+      this.config.get<string>('APP_URL') || 'http://localhost:3000'
+    ).replace(/\/$/, '');
+    const expected = req.cookies?.[OAUTH_STATE_COOKIE] as string | undefined;
+    res.clearCookie(OAUTH_STATE_COOKIE, clearOauthStateCookieOptions());
+
+    // state 불일치 = CSRF 의심. code 없음 = 사용자가 동의를 취소한 경우
+    if (!code || !state || !expected || state !== expected) {
+      return res.redirect(`${appUrl}/login/?error=kakao`);
+    }
+
+    try {
+      const profile = await this.kakaoService.fetchProfile(code);
+      const user = await this.authService.loginWithKakao(profile);
+      const token = this.authService.signToken(user);
+      res.cookie(ACCESS_TOKEN_COOKIE, token, accessTokenCookieOptions());
+      return res.redirect(`${appUrl}/`);
+    } catch {
+      return res.redirect(`${appUrl}/login/?error=kakao`);
+    }
   }
 }

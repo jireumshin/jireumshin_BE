@@ -19,5 +19,8 @@ services:
       SMTP_USER: ${SMTP_USER}
       SMTP_PASS: ${SMTP_PASS}
       MAIL_FROM: ${MAIL_FROM}
+      KAKAO_CLIENT_ID: ${KAKAO_CLIENT_ID}
+      KAKAO_CLIENT_SECRET: ${KAKAO_CLIENT_SECRET}
+      KAKAO_REDIRECT_URI: ${KAKAO_REDIRECT_URI:-https://api.jireumshin.shop/auth/kakao/callback}
     restart: unless-stopped
 # DB(Postgres)는 Prisma 붙이는 단계에서 추가 예정
