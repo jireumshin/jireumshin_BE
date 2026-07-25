@@ -19,4 +19,10 @@ export class TrialsController {
   findOne(@Param('id') id: string) {
     return this.trialsService.findOne(id);
   }
+
+  @Post(':id/verdict')
+  @ApiOperation({ summary: '심리 실행 후 판결 (멱등)' })
+  judge(@Param('id') id: string) {
+    return this.trialsService.judge(id);
+  }
 }

@@ -54,7 +54,10 @@ model Trial {
   reason    String?
   imageUrl  String?
   status    TrialStatus @default(PENDING)
-  verdict   Verdict?
+  verdict   Verdict? // 최종 판결 (다수결)
+  summary   String? // 판결 요지
+  regretIndex Int? // 예상 후회지수 (0~100)
+  jury      Json? // 배심원 4명 평결 [{ juror, emoji, vote, argument }]
   createdAt DateTime    @default(now())
   updatedAt DateTime    @updatedAt
 }
