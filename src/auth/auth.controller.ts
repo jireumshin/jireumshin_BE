@@ -3,6 +3,7 @@ import {
   Controller,
   Get,
   HttpCode,
+  Patch,
   Post,
   Query,
   Req,
@@ -18,6 +19,7 @@ import { KakaoService } from './kakao.service';
 import { SignupDto } from './dto/signup.dto';
 import { LoginDto } from './dto/login.dto';
 import { ResetPasswordDto, ResetRequestDto } from './dto/reset-password.dto';
+import { UpdateNicknameDto } from './dto/update-nickname.dto';
 import { JwtAuthGuard } from './jwt-auth.guard';
 import {
   ACCESS_TOKEN_COOKIE,
@@ -76,6 +78,14 @@ export class AuthController {
   me(@Req() req: Request) {
     const { userId } = req.user as { userId: string };
     return this.authService.me(userId);
+  }
+
+  @Patch('nickname')
+  @UseGuards(JwtAuthGuard)
+  @ApiOperation({ summary: '닉네임 변경' })
+  updateNickname(@Req() req: Request, @Body() dto: UpdateNicknameDto) {
+    const { userId } = req.user as { userId: string };
+    return this.authService.updateNickname(userId, dto.nickname);
   }
 
   @Post('password/reset-request')

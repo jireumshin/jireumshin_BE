@@ -83,6 +83,22 @@ export class AuthService {
     return this.toSafeUser(user);
   }
 
+  /** 닉네임 변경 — 본인 제외 중복 검사 후 갱신 */
+  async updateNickname(userId: string, nickname: string): Promise<SafeUser> {
+    const taken = await this.prisma.user.findFirst({
+      where: { nickname, id: { not: userId } },
+      select: { id: true },
+    });
+    if (taken) {
+      throw new ConflictException("이미 사용 중인 닉네임입니다.");
+    }
+    const user = await this.prisma.user.update({
+      where: { id: userId },
+      data: { nickname },
+    });
+    return this.toSafeUser(user);
+  }
+
   /** JWT 발급 (쿠키에 담을 access token) */
   signToken(user: SafeUser): string {
     return this.jwt.sign({ sub: user.id, nickname: user.nickname });
