@@ -11,8 +11,16 @@ export class TrialsService {
     private readonly verdict: VerdictService,
   ) {}
 
-  create(dto: CreateTrialDto) {
-    return this.prisma.trial.create({ data: dto });
+  create(dto: CreateTrialDto, userId?: string) {
+    return this.prisma.trial.create({ data: { ...dto, userId } });
+  }
+
+  /** 로그인 유저 본인이 기소한 판례 목록 (최신순) */
+  findMine(userId: string) {
+    return this.prisma.trial.findMany({
+      where: { userId },
+      orderBy: { createdAt: "desc" },
+    });
   }
 
   async findOne(id: string) {

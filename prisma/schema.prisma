@@ -23,6 +23,7 @@ model User {
   updatedAt  DateTime     @updatedAt
 
   resetTokens PasswordResetToken[]
+  trials      Trial[] // 내가 기소한 사건(판례)
 }
 
 model PasswordResetToken {
@@ -58,6 +59,10 @@ model Trial {
   summary   String? // 판결 요지
   regretIndex Int? // 예상 후회지수 (0~100)
   jury      Json? // 배심원 4명 평결 [{ juror, emoji, vote, argument }]
+  userId    String? // 기소한 유저(비로그인 익명 기소는 null)
+  user      User?       @relation(fields: [userId], references: [id], onDelete: SetNull)
   createdAt DateTime    @default(now())
   updatedAt DateTime    @updatedAt
+
+  @@index([userId])
 }
