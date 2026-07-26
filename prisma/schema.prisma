@@ -61,6 +61,12 @@ model Trial {
   jury      Json? // 배심원 4명 평결 [{ juror, emoji, vote, argument }]
   userId    String? // 기소한 유저(비로그인 익명 기소는 null)
   user      User?       @relation(fields: [userId], references: [id], onDelete: SetNull)
+  // 후회 추적 (판결 후 일정 시간 뒤 재질문)
+  followUpDueAt      DateTime? // 재질문이 열리는 시점 (판결 시각 + 지연)
+  followUpNotifiedAt DateTime? // 재질문 알림(메일) 발송 시각 (null = 미발송)
+  followedUpAt       DateTime? // 재질문에 응답한 시각 (null = 미응답)
+  purchased          Boolean? // 결국 샀는지
+  regret             Boolean? // 후회하는지 (핵심 신호)
   createdAt DateTime    @default(now())
   updatedAt DateTime    @updatedAt
 

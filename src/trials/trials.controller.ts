@@ -12,6 +12,7 @@ import { Request } from 'express';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { OptionalJwtAuthGuard } from '../auth/optional-jwt-auth.guard';
 import { CreateTrialDto } from './dto/create-trial.dto';
+import { FollowUpDto } from './dto/follow-up.dto';
 import { TrialsService } from './trials.service';
 
 @ApiTags('trials')
@@ -45,5 +46,17 @@ export class TrialsController {
   @ApiOperation({ summary: '심리 실행 후 판결 (멱등)' })
   judge(@Param('id') id: string) {
     return this.trialsService.judge(id);
+  }
+
+  @Post(':id/follow-up')
+  @UseGuards(JwtAuthGuard)
+  @ApiOperation({ summary: '후회 재질문 응답 (본인 판례)' })
+  followUp(
+    @Param('id') id: string,
+    @Req() req: Request,
+    @Body() dto: FollowUpDto,
+  ) {
+    const { userId } = req.user as { userId: string };
+    return this.trialsService.submitFollowUp(id, userId, dto);
   }
 }
