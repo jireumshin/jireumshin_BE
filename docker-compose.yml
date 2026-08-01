@@ -22,5 +22,7 @@ services:
       KAKAO_CLIENT_ID: ${KAKAO_CLIENT_ID}
       KAKAO_CLIENT_SECRET: ${KAKAO_CLIENT_SECRET}
       KAKAO_REDIRECT_URI: ${KAKAO_REDIRECT_URI:-https://api.jireumshin.shop/auth/kakao/callback}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-flash-latest}
+      GEMINI_API_KEY: ${GEMINI_API_KEY}
     restart: unless-stopped
 # DB(Postgres)는 Prisma 붙이는 단계에서 추가 예정
