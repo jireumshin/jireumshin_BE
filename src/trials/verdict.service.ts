@@ -1,4 +1,6 @@
-import { Injectable } from "@nestjs/common";
+import { Injectable, Logger } from "@nestjs/common";
+import { ConfigService } from "@nestjs/config";
+import { GoogleGenAI, Type, type Schema } from "@google/genai";
 
 export type JurorVote = "GUILTY" | "NOT_GUILTY";
 
@@ -70,7 +72,7 @@ const INNO_WORDS = [
   "이사",
 ];
 
-// 배심원 페르소나 — bias는 baseGuilt(0~100)에 더해지는 성향 보정
+// 배심원 페르소나 — kind는 규칙기반 성향 보정 키. 상세 캐릭터는 SYSTEM_PROMPT 참고(docs/persona_prd.md 기반)
 const JURORS = [
   { juror: "가성비요정", emoji: "🐿️", kind: "value" },
   { juror: "텅장지킴이", emoji: "🧘", kind: "saver" },
@@ -80,10 +82,178 @@ const JURORS = [
 
 const won = (n: number) => `${n.toLocaleString("ko-KR")}원`;
 
+// 배심원 페르소나 판결용 시스템 프롬프트 (매 요청 동일). docs/persona_prd.md 기반.
+const SYSTEM_PROMPT = `너는 "지름신 재판소"의 심리 진행자다. 사용자가 사려는 물건을 배심원 4명이 심리해서 살지 말지를 판결한다.
+
+- 유죄(GUILTY) = "사지 마", 무죄(NOT_GUILTY) = "사도 돼".
+- 진영 구도는 검사 2 : 변호 1 : 중립 1 로, 기본값이 살짝 "말리는 쪽"으로 기운다.
+- 각 배심원은 자기가 "따지는 것"의 관점으로 이 사건(물건·가격·이유)을 실제로 읽고 투표하며, 그 캐릭터 말투로 논거를 쓴다. 넷 다 존댓말을 쓴다.
+
+[가성비요정 🐿️ · 검사]
+- 따지는 것: 가격의 타당성(가치 대비 지출). 감정엔 관심 없고, 이 돈 쓸 값어치가 있는지만 본다.
+- 무기: 세일 주기·단가 계산("하루 950원꼴")·대체재. "예뻐서"엔 "예쁨의 가격은 얼마입니까?"로 반박.
+- 말투: 차분하고 논리적이되 살짝 얄미운 존댓말.
+- 성향: 검사(유죄 쪽). 단, 구체적 숫자·계산 근거가 서면 무죄로 설득될 수 있다.
+
+[텅장지킴이 🧘 · 검사]
+- 따지는 것: 소유와 필요(애초에 필요한가). 이미 가진 것·공간·미래 후회를 근거로 삼는다.
+- 무기: 중복 지적("이미 있잖아요")·필요 vs 욕망·"서랍 속 3번째가 될 미래".
+- 말투: 조곤조곤 선문답처럼 잔잔히 정곡을 찌르는 존댓말.
+- 성향: 검사(유죄 쪽). 진짜 결핍(고장·대체 불가 등)이 입증되면 무죄로 돌아선다.
+
+[지름요정 🔥 · 변호]
+- 따지는 것: 누릴 자격과 기회. 낭만·자기보상·희소성으로 방어한다.
+- 무기: 한정/품절 임박·"이만큼 고생했는데 이 정도는"·"검사님들은 낭만을 몰라요~".
+- 말투: 밝고 부추기며 살짝 사악한(😈) 존댓말, 애교를 섞는다.
+- 성향: 변호(무죄 쪽). 단 월세 밀림 등 선 넘는 무리한 소비엔 "어… 그건 좀…" 하며 주춤(유죄로).
+
+[팩트봇 🔮 · 중립]
+- 따지는 것: 확률과 통계. 감정 0, 어느 편도 들지 않는다.
+- 무기: 후회 확률 수치("사면 후회 64%, 안 사면 41%")·조건부 변수·유사 사례. 그럴듯한 수치를 던진다.
+- 말투: 건조하고 기계적인 존댓말, 수치를 자주 인용.
+- 성향: 중립. 확률이 유죄면 유죄, 무죄면 무죄. 새 정보나 합리적 사유엔 무죄로도 움직인다.
+
+작성 규칙:
+- argument는 이 물건·가격·이유를 구체적으로 반영한다. 아무 물건에나 붙을 일반론은 금지. 각 1~2문장, 캐릭터 말투 유지, 재치있게.
+- summary(판결 요지): 결과를 요약하고 유죄면 참으라는 넛지, 무죄면 응원을 담아 1~2문장.
+- regretIndex: 예상 후회지수 0~100 정수(유죄일수록 높게). 팩트봇이 제시한 후회 확률과 대략 맞추면 좋다.
+- 최종 판결은 배심원 다수결로 정해지니, 각자 소신껏 투표하면 된다.`;
+
+const JUROR_OPINION_SCHEMA: Schema = {
+  type: Type.OBJECT,
+  properties: {
+    vote: { type: Type.STRING, enum: ["GUILTY", "NOT_GUILTY"] },
+    argument: { type: Type.STRING, description: "캐릭터 말투의 논거 1~2문장" },
+  },
+  required: ["vote", "argument"],
+};
+
+// Gemini 구조화 출력 스키마 — 배심원별 평결 + 요지 + 후회지수
+const VERDICT_SCHEMA: Schema = {
+  type: Type.OBJECT,
+  properties: {
+    opinions: {
+      type: Type.OBJECT,
+      properties: {
+        가성비요정: JUROR_OPINION_SCHEMA,
+        텅장지킴이: JUROR_OPINION_SCHEMA,
+        지름요정: JUROR_OPINION_SCHEMA,
+        팩트봇: JUROR_OPINION_SCHEMA,
+      },
+      required: ["가성비요정", "텅장지킴이", "지름요정", "팩트봇"],
+    },
+    summary: { type: Type.STRING, description: "판결 요지 1~2문장" },
+    regretIndex: { type: Type.INTEGER, description: "예상 후회지수 0~100" },
+  },
+  required: ["opinions", "summary", "regretIndex"],
+};
+
+type VerdictData = {
+  opinions: Record<string, { vote: JurorVote; argument: string }>;
+  summary: string;
+  regretIndex: number;
+};
+
 @Injectable()
 export class VerdictService {
-  /** 기소 내용을 규칙기반으로 심리해 판결을 생성한다. */
-  deliberate(input: DeliberateInput): Judgment {
+  private readonly logger = new Logger(VerdictService.name);
+
+  constructor(private readonly config: ConfigService) {}
+
+  /**
+   * 기소 내용을 심리해 판결을 생성한다.
+   * GEMINI_API_KEY가 있으면 Gemini 페르소나 판결, 없거나 실패하면 규칙기반으로 폴백.
+   */
+  async deliberate(input: DeliberateInput): Promise<Judgment> {
+    const apiKey = this.config.get<string>("GEMINI_API_KEY");
+    if (!apiKey) {
+      return this.deliberateRuleBased(input);
+    }
+    try {
+      return await this.deliberateWithGemini(input, apiKey);
+    } catch (error) {
+      this.logger.warn(
+        `Gemini 판결 실패, 규칙기반으로 폴백: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+      return this.deliberateRuleBased(input);
+    }
+  }
+
+  /** Gemini에 배심원 페르소나를 부여해 판결을 생성한다. */
+  private async deliberateWithGemini(
+    input: DeliberateInput,
+    apiKey: string,
+  ): Promise<Judgment> {
+    const ai = new GoogleGenAI({ apiKey });
+    const model =
+      this.config.get<string>("GEMINI_MODEL") ?? "gemini-flash-latest";
+
+    const res = await this.withTimeout(
+      ai.models.generateContent({
+        model,
+        contents: this.caseText(input),
+        config: {
+          systemInstruction: SYSTEM_PROMPT,
+          responseMimeType: "application/json",
+          responseSchema: VERDICT_SCHEMA,
+        },
+      }),
+      30_000,
+    );
+
+    const text = res.text;
+    if (!text) {
+      throw new Error("판결 응답이 비어 있습니다.");
+    }
+    const data = JSON.parse(text) as VerdictData;
+
+    const jury: JuryOpinion[] = JURORS.map((p) => {
+      const op = data.opinions?.[p.juror];
+      if (!op?.vote || !op?.argument) {
+        throw new Error(`배심원 평결 누락: ${p.juror}`);
+      }
+      return {
+        juror: p.juror,
+        emoji: p.emoji,
+        vote: op.vote,
+        argument: op.argument,
+      };
+    });
+
+    const guiltyCount = jury.filter((j) => j.vote === "GUILTY").length;
+    const verdict: JurorVote = guiltyCount >= 2 ? "GUILTY" : "NOT_GUILTY";
+
+    return {
+      verdict,
+      summary: data.summary,
+      regretIndex: this.clamp(data.regretIndex),
+      jury,
+    };
+  }
+
+  /** SDK 자체 타임아웃에 기대지 않고 요청에 상한을 건다. */
+  private withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
+    return Promise.race([
+      p,
+      new Promise<T>((_, reject) =>
+        setTimeout(() => reject(new Error("요청 시간 초과")), ms),
+      ),
+    ]);
+  }
+
+  private caseText(input: DeliberateInput): string {
+    const reason = (input.reason ?? "").trim();
+    return [
+      `물건: ${input.itemName}`,
+      `가격: ${won(input.price)}`,
+      `사려는 이유: ${reason || "(이유 없음 — 충동 의심)"}`,
+    ].join("\n");
+  }
+
+  /** 규칙기반 심리 (LLM 미설정·실패 시 폴백). */
+  private deliberateRuleBased(input: DeliberateInput): Judgment {
     const reason = (input.reason ?? "").trim();
     const seed = this.hash(`${input.itemName}|${input.price}|${reason}`);
 
@@ -158,48 +328,52 @@ export class VerdictService {
     const reasonQuote = reason ? `"${reason}"` : "이유도 없이 지르려는 것";
 
     const pools: Record<string, Record<JurorVote, string[]>> = {
+      // 가성비요정 — 가격 타당성, 얄미운 존댓말
       value: {
         GUILTY: [
-          `${price}이면 가성비 최악이야. 이 돈으로 살 수 있는 게 얼마나 많은데.`,
-          `${item}, 가격 대비 만족이 안 나와. 냉정하게 유죄.`,
-          `이 가격표에 그만한 값어치는 없어. 유죄.`,
+          `${price}이면 가성비 최악이에요. 이 돈으로 살 수 있는 게 얼마나 많은데요.`,
+          `${item}, 가격 대비 만족이 안 나옵니다. 냉정하게 유죄.`,
+          `이 가격표에 그만한 값어치는 없어요. 유죄.`,
         ],
         NOT_GUILTY: [
-          `이 가격이면 가성비는 합격이야. 사도 돼.`,
-          `${item}, 값은 하네. 무죄 줄게.`,
+          `이 가격이면 가성비는 합격이에요. 사도 됩니다.`,
+          `${item}, 값은 하네요. 무죄 드릴게요.`,
         ],
       },
+      // 텅장지킴이 — 필요·소유, 조곤조곤 존댓말
       saver: {
         GUILTY: [
-          `통장이 운다… ${price}은 지켜야 할 돈이야. 유죄.`,
-          `이번 달도 텅장인데 ${item}이라니. 참자, 유죄.`,
-          `그 돈, 미래의 네가 고마워할 거야. 유죄.`,
+          `통장이 웁니다… ${price}은 지켜야 할 돈이에요. 유죄.`,
+          `${item}, 비슷한 거 이미 있지 않으세요? 참으시죠. 유죄.`,
+          `그 돈, 미래의 당신이 고마워할 거예요. 유죄.`,
         ],
         NOT_GUILTY: [
-          `이 정도는 통장이 버텨. 이번만 무죄.`,
-          `아껴 온 보상이라 치자. 무죄.`,
+          `이 정도는 통장이 버텨요. 이번만 무죄.`,
+          `정말 필요하신 것 같네요. 무죄 드립니다.`,
         ],
       },
+      // 지름요정 — 누릴 자격, 밝고 부추기는 존댓말
       buyer: {
         GUILTY: [
-          `이건 나도 못 말려… 이번엔 참아. 유죄.`,
-          `지름요정도 손절할 때가 있지. 유죄.`,
+          `이건… 저도 부추기고 싶지만 이번엔 참으세요. 유죄.`,
+          `저도 선 넘는 소비엔 손절해요. 어… 이건 좀. 유죄.`,
         ],
         NOT_GUILTY: [
-          `예쁘면 사는 거지! 인생은 한 번뿐. 무죄!`,
-          `${item}, 갖고 싶을 때가 살 때야. 질러!`,
-          `행복은 통장에 안 남아. 무죄!`,
+          `예쁘면 사는 거죠! 인생은 한 번뿐이에요. 무죄!`,
+          `${item}, 갖고 싶을 때가 살 때예요. 지르세요!`,
+          `고생한 나에게 주는 선물, 이 정도는 누려도 돼요. 무죄!`,
         ],
       },
+      // 팩트봇 — 확률·통계, 건조한 존댓말
       fact: {
         GUILTY: [
-          `감정 소비 신호 감지됨. 구매 정당성 부족. 유죄.`,
-          `${reasonQuote} — 필요보다 욕구에 가까움. 유죄.`,
-          `데이터상 후회 확률 높음. 유죄 판정.`,
+          `분석 결과 구매 후 후회 확률 64%. 감정 소비 신호 감지. 유죄.`,
+          `${reasonQuote} — 필요보다 욕구에 가깝습니다. 유죄.`,
+          `데이터상 후회 가능성 높음. 유죄로 판정합니다.`,
         ],
         NOT_GUILTY: [
-          `합리적 사유 확인됨. 구매 타당. 무죄.`,
-          `필요 기반 소비로 분석됨. 무죄.`,
+          `합리적 사유 확인. 안 산 후회가 더 큽니다. 무죄.`,
+          `필요 기반 소비로 분석됩니다. 무죄.`,
         ],
       },
     };

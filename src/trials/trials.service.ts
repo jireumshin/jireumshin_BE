@@ -46,7 +46,7 @@ export class TrialsService {
       return trial;
     }
 
-    const judgment = this.verdict.deliberate({
+    const judgment = await this.verdict.deliberate({
       itemName: trial.itemName,
       price: trial.price,
       reason: trial.reason,
