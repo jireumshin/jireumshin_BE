@@ -15,7 +15,7 @@ export class CreateTrialDto {
   @ApiPropertyOptional({ example: '신형 색깔이 예뻐서요…', description: '사려는 이유' })
   @IsOptional()
   @IsString()
-  @MaxLength(200)
+  @MaxLength(500)
   reason?: string;
 
   @ApiPropertyOptional({ description: '상품 이미지 URL' })

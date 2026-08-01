@@ -24,6 +24,23 @@ export type DeliberateInput = {
   reason?: string | null;
 };
 
+/** 배심원 표가 2:2 동수인지. */
+export function isTie(jury: JuryOpinion[]): boolean {
+  return jury.filter((j) => j.vote === "GUILTY").length === 2;
+}
+
+/**
+ * 배심원 표로 최종 판결을 판정.
+ * 2:2 동수는 중립 배심원(팩트봇)이 캐스팅보트를 쥔다.
+ */
+export function resolveVerdict(jury: JuryOpinion[]): JurorVote {
+  const guilty = jury.filter((j) => j.vote === "GUILTY").length;
+  if (guilty >= 3) return "GUILTY";
+  if (guilty <= 1) return "NOT_GUILTY";
+  const factbot = jury.find((j) => j.juror === "팩트봇");
+  return factbot?.vote ?? "GUILTY";
+}
+
 // 사려는 이유에서 감지하는 신호 키워드
 const GUILTY_WORDS = [
   "예뻐",
@@ -181,6 +198,12 @@ export class VerdictService {
     }
   }
 
+  /** 변론 종료 시점의 최종 배심원 구성으로 판결 요지를 다시 쓴다. */
+  composeSummary(jury: JuryOpinion[], verdict: JurorVote): string {
+    const seed = this.hash(jury.map((j) => `${j.juror}${j.vote}`).join("|"));
+    return this.summary(jury, verdict, seed);
+  }
+
   /** Gemini에 배심원 페르소나를 부여해 판결을 생성한다. */
   private async deliberateWithGemini(
     input: DeliberateInput,
@@ -222,8 +245,7 @@ export class VerdictService {
       };
     });
 
-    const guiltyCount = jury.filter((j) => j.vote === "GUILTY").length;
-    const verdict: JurorVote = guiltyCount >= 2 ? "GUILTY" : "NOT_GUILTY";
+    const verdict = resolveVerdict(jury);
 
     return {
       verdict,
@@ -278,9 +300,8 @@ export class VerdictService {
       };
     });
 
-    const guiltyCount = jury.filter((j) => j.vote === "GUILTY").length;
-    // 2:2 동수는 유죄 (재판소 기본값 — 신중하게)
-    const verdict: JurorVote = guiltyCount >= 2 ? "GUILTY" : "NOT_GUILTY";
+    // 2:2 동수는 팩트봇(중립)이 캐스팅보트 (resolveVerdict)
+    const verdict = resolveVerdict(jury);
     const regretIndex = this.clamp(
       verdict === "GUILTY" ? Math.max(baseGuilt, 52) : Math.min(baseGuilt, 40),
     );

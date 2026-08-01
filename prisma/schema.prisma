@@ -48,6 +48,11 @@ enum Verdict {
   NOT_GUILTY // 무죄 = 사도 됨
 }
 
+enum MessageRole {
+  USER // 피고인(사용자)의 변론
+  JUROR // 배심원의 반응
+}
+
 model Trial {
   id        String      @id @default(cuid())
   itemName  String
@@ -67,8 +72,27 @@ model Trial {
   followedUpAt       DateTime? // 재질문에 응답한 시각 (null = 미응답)
   purchased          Boolean? // 결국 샀는지
   regret             Boolean? // 후회하는지 (핵심 신호)
+  // 배심원 변론(설득) 게임 — 판결 후 사용자가 배심원을 설득해 표를 뒤집는다
+  gauges        Json?          // 배심원별 설득 게이지 { juror: 0~100 } (null = 변론 시작 전)
+  defenseRounds Int      @default(0) // 사용한 변론 라운드 수
+  defenseClosed Boolean  @default(false) // 라운드 소진 후 변론 종료(판결 확정)
+  messages      TrialMessage[] // 변론 대화 로그
   createdAt DateTime    @default(now())
   updatedAt DateTime    @updatedAt
 
   @@index([userId])
+}
+
+model TrialMessage {
+  id        String      @id @default(cuid())
+  trialId   String
+  trial     Trial       @relation(fields: [trialId], references: [id], onDelete: Cascade)
+  role      MessageRole
+  juror     String? // JUROR일 때 어느 배심원인지
+  emoji     String? // JUROR일 때 배심원 이모지
+  content   String
+  round     Int // 몇 번째 변론 라운드에서 나온 메시지인지
+  createdAt DateTime    @default(now())
+
+  @@index([trialId])
 }
