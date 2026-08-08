@@ -53,6 +53,17 @@ enum MessageRole {
   JUROR // 배심원의 반응
 }
 
+enum TrialMode {
+  SINGLE // 한 물건 살까/말까 (1차)
+  VERSUS // 두 물건 A vs B 비교 (2차)
+}
+
+enum VersusResult {
+  A // A 물건 승 (이걸 사라)
+  B // B 물건 승 (이걸 사라)
+  NEITHER // 둘 다 별로 (지금은 사지 마)
+}
+
 model Trial {
   id        String      @id @default(cuid())
   itemName  String
@@ -60,7 +71,8 @@ model Trial {
   reason    String?
   imageUrl  String?
   status    TrialStatus @default(PENDING)
-  verdict   Verdict? // 최종 판결 (다수결)
+  mode      TrialMode   @default(SINGLE) // SINGLE=살까말까, VERSUS=A vs B 비교
+  verdict   Verdict? // 최종 판결 (다수결, SINGLE 모드)
   summary   String? // 판결 요지
   regretIndex Int? // 예상 후회지수 (0~100)
   jury      Json? // 배심원 4명 평결 [{ juror, emoji, vote, argument }]
@@ -77,6 +89,14 @@ model Trial {
   defenseRounds Int      @default(0) // 사용한 변론 라운드 수
   defenseClosed Boolean  @default(false) // 라운드 소진 후 변론 종료(판결 확정)
   messages      TrialMessage[] // 변론 대화 로그
+  // ── A vs B 비교 재판 (VERSUS 모드) — B 물건과 비교 결과. SINGLE이면 모두 null ──
+  itemNameB    String? // 비교 대상 B 물건
+  priceB       Int?
+  reasonB      String?
+  imageUrlB    String?
+  versusResult VersusResult? // A | B | NEITHER (둘 다 별로)
+  juryB        Json? // B 물건 배심원 평결 (A는 jury 재사용)
+  gaugesB      Json? // B 물건 배심원 게이지 (A는 gauges 재사용)
   createdAt DateTime    @default(now())
   updatedAt DateTime    @updatedAt
 
@@ -92,6 +112,7 @@ model TrialMessage {
   emoji     String? // JUROR일 때 배심원 이모지
   content   String
   round     Int // 몇 번째 변론 라운드에서 나온 메시지인지
+  target    String? // VERSUS 변론에서 편든 물건 ("A" | "B"), SINGLE이면 null
   createdAt DateTime    @default(now())
 
   @@index([trialId])

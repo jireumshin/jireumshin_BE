@@ -41,6 +41,7 @@ export type DefenseInput = {
   reason?: string | null;
   gauges: Record<string, number>; // 현재 배심원별 게이지 0~100
   message: string; // 피고인의 변론
+  history?: string; // 지난 변론 대화 (반복 방지)
 };
 
 export type JurorReaction = {
@@ -81,7 +82,8 @@ const DEFENSE_SYSTEM_PROMPT = `너는 "지름신 재판소"의 심리 진행자�
 작성 규칙:
 - reply: 각 배심원이 이번 진술에 대해 캐릭터 말투로 1~2문장 반응. 이해가 됐으면 인정하는 티를, 아니면 재치있게 되묻는다.
 - gaugeDelta: -30~30 정수. 새 진짜 맥락에 정확히 꽂혔으면 크게(+15~30), 그럭저럭이면 +5~12, 새 맥락 없으면 0, 억지·무리한 소비 실토면 음수.
-- 진술 내용을 구체적으로 반영한다. 아무 데나 붙을 일반론 금지.`;
+- 진술 내용을 구체적으로 반영한다. 아무 데나 붙을 일반론 금지.
+- [지난 대화]가 주어지면 이미 한 말을 반복하지 마라. 피고인이 새로 준 정보는 인정해 게이지를 움직이고, 답변도 그 새 정보에 반응한다.`;
 
 const REACTION_SCHEMA: Schema = {
   type: Type.OBJECT,
@@ -116,6 +118,71 @@ type DefenseData = {
   reactions: Record<string, { reply: string; gaugeDelta: number }>;
 };
 
+// ── A vs B 비교 변론 (편들기 X → 추가 진술로 A·B 동시 재평가) ──
+const VERSUS_DEFENSE_SYSTEM_PROMPT = `너는 "지름신 재판소"의 심리 진행자다. A·B 두 물건 중 뭘 살지 비교 판결이 이미 났고, 지금 피고인이 배심원 4명과 더 이야기하며 함께 고민하는 단계다.
+
+- 이건 한쪽을 편드는 게 아니다. 피고인이 새로 털어놓는 맥락(용도·감당·취향·상황·질문)을 반영해, 각 배심원이 A와 B의 "구매 가치 점수"를 각각 얼마나 조정할지 정한다.
+- deltaA, deltaB는 각 -30~30 정수. 새 맥락이 A에 유리하면 deltaA를 +, B에 유리하면 deltaB를 +. 영향 없으면 0. 근거 없는 감정·억지는 작게, 무리한 소비 신호는 음수.
+- [지난 대화]가 주어지면 **이미 한 말을 반복하지 마라.** 피고인이 새로 준 정보(예: 신어봤다, 매일 쓴다)는 실제로 인정해 점수를 움직이고, 답변도 그 새 정보에 반응한다. 같은 논리 재탕 금지.
+- reply: 그 배심원이 이번 이야기에 대해 A·B를 견주며 답하는 1~2문장. 캐릭터 말투, 존댓말.
+
+[가성비요정 🐿️] 가격 대비 값어치. 단가·세일·대체재.
+[텅장지킴이 🧘] 감당과 후회. 어느 쪽이 덜 부담·덜 후회.
+[지름요정 🔥] 설렘·자기보상. 어느 쪽이 더 갖고 싶은지.
+[팩트봇 🔮] 후회 확률·통계. 수치로.`;
+
+const VERSUS_REACTION_SCHEMA: Schema = {
+  type: Type.OBJECT,
+  properties: {
+    reply: { type: Type.STRING, description: "A·B 견주는 반응 1~2문장" },
+    deltaA: { type: Type.INTEGER, description: "A 점수 변화 -30~30" },
+    deltaB: { type: Type.INTEGER, description: "B 점수 변화 -30~30" },
+  },
+  required: ["reply", "deltaA", "deltaB"],
+};
+
+const VERSUS_DEFENSE_SCHEMA: Schema = {
+  type: Type.OBJECT,
+  properties: {
+    reactions: {
+      type: Type.OBJECT,
+      properties: {
+        가성비요정: VERSUS_REACTION_SCHEMA,
+        텅장지킴이: VERSUS_REACTION_SCHEMA,
+        지름요정: VERSUS_REACTION_SCHEMA,
+        팩트봇: VERSUS_REACTION_SCHEMA,
+      },
+      required: ["가성비요정", "텅장지킴이", "지름요정", "팩트봇"],
+    },
+  },
+  required: ["reactions"],
+};
+
+type VersusDefenseData = {
+  reactions: Record<string, { reply: string; deltaA: number; deltaB: number }>;
+};
+
+export type VersusDefenseInput = {
+  itemName: string;
+  price: number;
+  reason?: string | null;
+  itemNameB: string;
+  priceB: number;
+  reasonB?: string | null;
+  gaugesA: Record<string, number>;
+  gaugesB: Record<string, number>;
+  message: string;
+  history?: string; // 지난 변론 대화 (반복 방지)
+};
+
+export type VersusReaction = {
+  juror: string;
+  emoji: string;
+  reply: string;
+  deltaA: number;
+  deltaB: number;
+};
+
 @Injectable()
 export class DefenseService {
   private readonly logger = new Logger(DefenseService.name);
@@ -132,6 +199,105 @@ export class DefenseService {
   /** 게이지로 배심원 표를 판정. */
   static voteFromGauge(gauge: number): JurorVote {
     return gauge >= GAUGE_THRESHOLD ? "NOT_GUILTY" : "GUILTY";
+  }
+
+  /** 비교 변론: 추가 진술 하나로 A·B 점수를 동시에 재평가한다. */
+  async evaluateVersus(input: VersusDefenseInput): Promise<VersusReaction[]> {
+    const apiKey = this.config.get<string>("GEMINI_API_KEY");
+    if (!apiKey) {
+      return this.evaluateVersusRuleBased(input);
+    }
+    try {
+      return await this.evaluateVersusWithGemini(input, apiKey);
+    } catch (error) {
+      this.logger.warn(
+        `Gemini 비교 변론 실패, 규칙기반으로 폴백: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+      return this.evaluateVersusRuleBased(input);
+    }
+  }
+
+  private async evaluateVersusWithGemini(
+    input: VersusDefenseInput,
+    apiKey: string,
+  ): Promise<VersusReaction[]> {
+    const ai = new GoogleGenAI({ apiKey });
+    const model =
+      this.config.get<string>("GEMINI_MODEL") ?? "gemini-flash-latest";
+    const res = await this.withTimeout(
+      ai.models.generateContent({
+        model,
+        contents: this.versusText(input),
+        config: {
+          systemInstruction: VERSUS_DEFENSE_SYSTEM_PROMPT,
+          responseMimeType: "application/json",
+          responseSchema: VERSUS_DEFENSE_SCHEMA,
+        },
+      }),
+      30_000,
+    );
+    const text = res.text;
+    if (!text) {
+      throw new Error("비교 변론 응답이 비어 있습니다.");
+    }
+    const data = JSON.parse(text) as VersusDefenseData;
+    return JURORS.map((p) => {
+      const r = data.reactions?.[p.juror];
+      if (!r?.reply || typeof r.deltaA !== "number" || typeof r.deltaB !== "number") {
+        throw new Error(`배심원 반응 누락: ${p.juror}`);
+      }
+      return {
+        juror: p.juror,
+        emoji: p.emoji,
+        reply: r.reply,
+        deltaA: this.clampDelta(r.deltaA),
+        deltaB: this.clampDelta(r.deltaB),
+      };
+    });
+  }
+
+  private versusText(input: VersusDefenseInput): string {
+    const rA = (input.reason ?? "").trim() || "(이유 없음)";
+    const rB = (input.reasonB ?? "").trim() || "(이유 없음)";
+    const gline = JURORS.map(
+      (p) =>
+        `${p.juror} A${Math.round(input.gaugesA[p.juror] ?? 50)}/B${Math.round(input.gaugesB[p.juror] ?? 50)}`,
+    ).join(", ");
+    const parts = [
+      `A 물건: ${input.itemName} / ${won(input.price)} / 이유: ${rA}`,
+      `B 물건: ${input.itemNameB} / ${won(input.priceB)} / 이유: ${rB}`,
+      `현재 점수(높을수록 살 값어치): ${gline}`,
+    ];
+    if (input.history?.trim()) {
+      parts.push(`[지난 대화]\n${input.history.trim()}`);
+    }
+    parts.push(`피고인의 새 진술: "${input.message.trim()}"`);
+    return parts.join("\n");
+  }
+
+  /** 규칙기반 비교 변론 (폴백). 방향을 못 가르니 새 맥락이면 양쪽 소폭 +. */
+  private evaluateVersusRuleBased(
+    input: VersusDefenseInput,
+  ): VersusReaction[] {
+    const msg = input.message;
+    const seed = this.hash(msg);
+    const rich = /[0-9]|필요|매일|자주|오래|운동|업무|출퇴근|공부|단가/.test(msg);
+    const base = rich ? 8 : 3;
+    const replies: Record<string, string[]> = {
+      value: ["가격 대비로 둘 다 다시 볼게요.", "단가 계산을 새로 해봐야겠네요."],
+      saver: ["감당되는 쪽인지 한 번 더 보겠습니다.", "후회 없을 선택인지 살펴볼게요."],
+      buyer: ["그렇게 쓸 거면 둘 다 매력 있죠~", "설레는 포인트가 생기네요!"],
+      fact: ["새 정보 반영해 확률을 다시 계산합니다.", "변수 하나 추가했습니다."],
+    };
+    return JURORS.map((p, i) => ({
+      juror: p.juror,
+      emoji: p.emoji,
+      reply: replies[p.kind][(seed + i) % 2],
+      deltaA: base,
+      deltaB: base,
+    }));
   }
 
   /**
@@ -210,13 +376,17 @@ export class DefenseService {
     const gaugeLine = JURORS.map(
       (p) => `${p.juror} ${Math.round(input.gauges[p.juror] ?? 50)}`,
     ).join(", ");
-    return [
+    const parts = [
       `물건: ${input.itemName}`,
       `가격: ${won(input.price)}`,
       `사려는 이유: ${reason || "(이유 없음)"}`,
       `현재 배심원 게이지(높을수록 무죄): ${gaugeLine}`,
-      `피고인 변론: "${input.message.trim()}"`,
-    ].join("\n");
+    ];
+    if (input.history?.trim()) {
+      parts.push(`[지난 대화]\n${input.history.trim()}`);
+    }
+    parts.push(`피고인 변론: "${input.message.trim()}"`);
+    return parts.join("\n");
   }
 
   /** 규칙기반 변론 심리 (LLM 미설정·실패 시 폴백). */

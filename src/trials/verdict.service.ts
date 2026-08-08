@@ -41,6 +41,52 @@ export function resolveVerdict(jury: JuryOpinion[]): JurorVote {
   return factbot?.vote ?? "GUILTY";
 }
 
+// ── A vs B 비교 재판 (VERSUS) ──
+export type VersusResultType = "A" | "B" | "NEITHER";
+
+export type VersusJurorScore = {
+  juror: string;
+  emoji: string;
+  scoreA: number; // A 구매 가치 0~100
+  scoreB: number; // B 구매 가치 0~100
+  argument: string; // A vs B 비교 코멘트
+};
+
+export type VersusJudgment = {
+  result: VersusResultType;
+  summary: string;
+  regretIndex: number;
+  jurors: VersusJurorScore[];
+};
+
+export type VersusInput = {
+  itemName: string;
+  price: number;
+  reason?: string | null;
+  itemNameB: string;
+  priceB: number;
+  reasonB?: string | null;
+};
+
+const WORTH_THRESHOLD = 50; // 저울 무게가 이 아래면 그 물건은 "별로"
+
+const avgBy = (
+  scores: VersusJurorScore[],
+  sel: (s: VersusJurorScore) => number,
+): number =>
+  scores.length ? scores.reduce((sum, s) => sum + sel(s), 0) / scores.length : 0;
+
+/**
+ * 배심원 점수로 비교 결과를 판정 (모델 Y).
+ * 둘 다 임계 미만이면 NEITHER, 아니면 무게(평균 점수) 큰 쪽.
+ */
+export function resolveVersus(scores: VersusJurorScore[]): VersusResultType {
+  const wA = avgBy(scores, (s) => s.scoreA);
+  const wB = avgBy(scores, (s) => s.scoreB);
+  if (wA < WORTH_THRESHOLD && wB < WORTH_THRESHOLD) return "NEITHER";
+  return wA >= wB ? "A" : "B";
+}
+
 // 사려는 이유에서 감지하는 신호 키워드
 const GUILTY_WORDS = [
   "예뻐",
@@ -171,6 +217,61 @@ const VERDICT_SCHEMA: Schema = {
   required: ["opinions", "summary", "regretIndex"],
 };
 
+// ── A vs B 비교 판결 프롬프트/스키마 ──
+const VERSUS_SYSTEM_PROMPT = `너는 "지름신 재판소"의 심리 진행자다. 사용자는 A·B 두 물건 중 하나를 사려 하고, 배심원 4명이 둘을 비교해 어느 쪽이 나은지 심리한다.
+
+- 기준은 "필요하냐"가 아니라 "각 물건이 너에게 값어치가 있나"다: (1)감당 가능성 (2)오래·자주 줄 기쁨 (3)낮은 후회 (4)대안 대비 합리.
+- 각 배심원은 자기 관점에서 A와 B에 각각 "구매 가치 점수"(0~100)를 매긴다. 높을수록 "이건 사도 좋다".
+  · 순수하게 갖고 싶은 것(want)도 감당되고 후회 낮으면 높게 줄 수 있다.
+  · 둘 다 별로면 둘 다 낮게 줘라. 억지로 한쪽을 띄우지 마라.
+- 넷 다 존댓말. 각자 말투 유지.
+
+[가성비요정 🐿️] 가격 대비 값어치. 단가·세일·대체재로 A·B를 비교. 차분하고 얄미운 말투.
+[텅장지킴이 🧘] 감당과 후회. 어느 쪽이 더 감당되고 덜 후회할지. 조곤조곤한 말투.
+[지름요정 🔥] 설렘·자기보상. 어느 쪽이 더 갖고 싶고 행복을 줄지. 밝고 부추기는 말투.
+[팩트봇 🔮] 후회 확률·통계. 어느 쪽 후회 확률이 낮은지 수치로. 건조하고 기계적인 말투.
+
+작성 규칙:
+- scoreA·scoreB는 0~100 정수. 물건·가격·이유를 구체 반영, 일반론 금지.
+- argument: 그 배심원이 자기 축에서 A와 B를 비교하는 코멘트 1~2문장.
+- summary: 비교 결과 요지 1~2문장(누가 이겼는지 또는 둘 다 별로인지 + 넛지).
+- regretIndex: 최종 선택의 예상 후회지수 0~100 정수.`;
+
+const VERSUS_JUROR_SCHEMA: Schema = {
+  type: Type.OBJECT,
+  properties: {
+    scoreA: { type: Type.INTEGER, description: "A 구매 가치 0~100" },
+    scoreB: { type: Type.INTEGER, description: "B 구매 가치 0~100" },
+    argument: { type: Type.STRING, description: "A vs B 비교 코멘트 1~2문장" },
+  },
+  required: ["scoreA", "scoreB", "argument"],
+};
+
+const VERSUS_SCHEMA: Schema = {
+  type: Type.OBJECT,
+  properties: {
+    scores: {
+      type: Type.OBJECT,
+      properties: {
+        가성비요정: VERSUS_JUROR_SCHEMA,
+        텅장지킴이: VERSUS_JUROR_SCHEMA,
+        지름요정: VERSUS_JUROR_SCHEMA,
+        팩트봇: VERSUS_JUROR_SCHEMA,
+      },
+      required: ["가성비요정", "텅장지킴이", "지름요정", "팩트봇"],
+    },
+    summary: { type: Type.STRING, description: "비교 판결 요지 1~2문장" },
+    regretIndex: { type: Type.INTEGER, description: "예상 후회지수 0~100" },
+  },
+  required: ["scores", "summary", "regretIndex"],
+};
+
+type VersusData = {
+  scores: Record<string, { scoreA: number; scoreB: number; argument: string }>;
+  summary: string;
+  regretIndex: number;
+};
+
 type VerdictData = {
   opinions: Record<string, { vote: JurorVote; argument: string }>;
   summary: string;
@@ -202,6 +303,177 @@ export class VerdictService {
       );
       return this.deliberateRuleBased(input);
     }
+  }
+
+  /**
+   * A vs B 비교 심리 (VERSUS). 1회 호출로 두 물건을 동시 채점·비교한다.
+   * GEMINI_API_KEY가 있으면 Gemini, 없거나 실패하면 규칙기반으로 폴백.
+   */
+  async deliberateVersus(input: VersusInput): Promise<VersusJudgment> {
+    const apiKey = this.config.get<string>("GEMINI_API_KEY");
+    if (!apiKey) {
+      return this.deliberateVersusRuleBased(input);
+    }
+    try {
+      return await this.deliberateVersusWithGemini(input, apiKey);
+    } catch (error) {
+      this.logger.warn(
+        `Gemini 비교 판결 실패, 규칙기반으로 폴백: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+      return this.deliberateVersusRuleBased(input);
+    }
+  }
+
+  private async deliberateVersusWithGemini(
+    input: VersusInput,
+    apiKey: string,
+  ): Promise<VersusJudgment> {
+    const ai = new GoogleGenAI({ apiKey });
+    const model =
+      this.config.get<string>("GEMINI_MODEL") ?? "gemini-flash-latest";
+
+    const res = await this.withTimeout(
+      ai.models.generateContent({
+        model,
+        contents: this.versusText(input),
+        config: {
+          systemInstruction: VERSUS_SYSTEM_PROMPT,
+          responseMimeType: "application/json",
+          responseSchema: VERSUS_SCHEMA,
+        },
+      }),
+      30_000,
+    );
+
+    const text = res.text;
+    if (!text) {
+      throw new Error("비교 판결 응답이 비어 있습니다.");
+    }
+    const data = JSON.parse(text) as VersusData;
+
+    const jurors: VersusJurorScore[] = JURORS.map((p) => {
+      const s = data.scores?.[p.juror];
+      if (!s || typeof s.scoreA !== "number" || typeof s.scoreB !== "number") {
+        throw new Error(`배심원 점수 누락: ${p.juror}`);
+      }
+      return {
+        juror: p.juror,
+        emoji: p.emoji,
+        scoreA: this.clamp(s.scoreA),
+        scoreB: this.clamp(s.scoreB),
+        argument: s.argument,
+      };
+    });
+
+    return {
+      result: resolveVersus(jurors),
+      summary: data.summary,
+      regretIndex: this.clamp(data.regretIndex),
+      jurors,
+    };
+  }
+
+  private versusText(input: VersusInput): string {
+    const rA = (input.reason ?? "").trim() || "(이유 없음)";
+    const rB = (input.reasonB ?? "").trim() || "(이유 없음)";
+    return [
+      `A 물건: ${input.itemName} / ${won(input.price)} / 이유: ${rA}`,
+      `B 물건: ${input.itemNameB} / ${won(input.priceB)} / 이유: ${rB}`,
+    ].join("\n");
+  }
+
+  /** 규칙기반 비교 심리 (LLM 미설정·실패 시 폴백). */
+  private deliberateVersusRuleBased(input: VersusInput): VersusJudgment {
+    const worthA = this.itemWorth(input.price, input.reason);
+    const worthB = this.itemWorth(input.priceB, input.reasonB);
+    const seed = this.hash(`${input.itemName}|${input.itemNameB}`);
+
+    const jurors: VersusJurorScore[] = JURORS.map((p, i) => {
+      const b = this.worthBias(p.kind);
+      const scoreA = this.clamp(worthA + b);
+      const scoreB = this.clamp(worthB + b);
+      const lead = scoreA === scoreB ? "tie" : scoreA > scoreB ? "A" : "B";
+      return {
+        juror: p.juror,
+        emoji: p.emoji,
+        scoreA,
+        scoreB,
+        argument: this.versusArgument(p.kind, lead, input, (seed + i) % 2),
+      };
+    });
+
+    const result = resolveVersus(jurors);
+    const regretIndex = this.clamp(
+      result === "NEITHER" ? 70 : 100 - Math.max(worthA, worthB),
+    );
+    return {
+      result,
+      summary: this.versusSummary(result, input),
+      regretIndex,
+      jurors,
+    };
+  }
+
+  /** 한 물건의 기본 구매 가치(0~100) — 가격이 비쌀수록↓, 정당한 이유↑. */
+  private itemWorth(price: number, reason?: string | null): number {
+    const r = (reason ?? "").trim();
+    const guilty = GUILTY_WORDS.filter((w) => r.includes(w)).length;
+    const inno = INNO_WORDS.filter((w) => r.includes(w)).length;
+    return this.clamp(75 - this.priceScore(price) + inno * 10 - guilty * 8);
+  }
+
+  private worthBias(kind: string): number {
+    switch (kind) {
+      case "value":
+        return -8; // 가성비요정은 깐깐
+      case "saver":
+        return -6;
+      case "buyer":
+        return 12; // 지름요정은 후하게
+      default:
+        return 0; // 팩트봇 중립
+    }
+  }
+
+  private versusArgument(
+    kind: string,
+    lead: "A" | "B" | "tie",
+    input: VersusInput,
+    pick: number,
+  ): string {
+    const A = input.itemName;
+    const B = input.itemNameB;
+    const winner = lead === "A" ? A : lead === "B" ? B : null;
+    const pools: Record<string, string[]> = {
+      value: [
+        `가격 대비 값어치는 ${winner ?? "둘이 비슷하네요"} 쪽이 낫습니다.`,
+        `${winner ?? "둘 다"} 단가를 따져보면 그쪽이 합리적이에요.`,
+      ],
+      saver: [
+        `감당·후회를 보면 ${winner ?? "둘 다 애매"}${winner ? " 쪽이 편해요." : "해요."}`,
+        `${winner ?? "둘 다"} 나중에 덜 후회할 선택으로 보여요.`,
+      ],
+      buyer: [
+        `설레는 건 ${winner ?? "둘 다"}${winner ? " 쪽이죠! 그걸 사요~" : " 매력 있어요~"}`,
+        `${winner ?? "둘 다"} 갖고 싶은 마음이 크네요, 질러요!`,
+      ],
+      fact: [
+        `후회 확률상 ${winner ?? "둘이 비등"}${winner ? " 쪽이 낮습니다." : "합니다."}`,
+        `데이터로는 ${winner ?? "우열을 가리기 어렵"}${winner ? "이 우세." : "습니다."}`,
+      ],
+    };
+    const pool = pools[kind];
+    return pool[pick % pool.length];
+  }
+
+  private versusSummary(result: VersusResultType, input: VersusInput): string {
+    if (result === "NEITHER") {
+      return "배심원단은 지금은 둘 다 별로라고 봤어요. 급하지 않다면 잠시 참아봐요.";
+    }
+    const winner = result === "A" ? input.itemName : input.itemNameB;
+    return `배심원단은 ${winner} 쪽에 손을 들었어요. 후회 없는 선택 되세요!`;
   }
 
   /** 변론 종료 시점의 최종 배심원 구성으로 판결 요지를 다시 쓴다. */

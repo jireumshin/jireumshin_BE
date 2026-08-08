@@ -10,9 +10,13 @@ import { PrismaService } from "../prisma/prisma.service";
 import { CreateTrialDto } from "./dto/create-trial.dto";
 import { FollowUpDto } from "./dto/follow-up.dto";
 import { DefenseDto } from "./dto/defense.dto";
-import { VerdictService, resolveVerdict } from "./verdict.service";
-import type { JuryOpinion } from "./verdict.service";
-import { DefenseService, isDefenseClosed } from "./defense.service";
+import { VerdictService, resolveVerdict, resolveVersus } from "./verdict.service";
+import type { JuryOpinion, VersusJurorScore } from "./verdict.service";
+import {
+  DefenseService,
+  isDefenseClosed,
+  BASE_DEFENSE_ROUNDS,
+} from "./defense.service";
 
 @Injectable()
 export class TrialsService {
@@ -71,6 +75,9 @@ export class TrialsService {
     if (trial.status === "JUDGED") {
       return trial;
     }
+    if (trial.mode === "VERSUS") {
+      return this.judgeVersus(trial);
+    }
 
     const judgment = await this.verdict.deliberate({
       itemName: trial.itemName,
@@ -86,6 +93,39 @@ export class TrialsService {
         summary: judgment.summary,
         regretIndex: judgment.regretIndex,
         jury: judgment.jury as unknown as Prisma.InputJsonValue,
+        followUpDueAt: this.followUpDueDate(),
+      },
+    });
+  }
+
+  /** A vs B 비교 심리 후 결과 저장. jury=배심원 점수, gauges/gaugesB=A/B 무게. */
+  private async judgeVersus(trial: { id: string } & Record<string, unknown>) {
+    const judgment = await this.verdict.deliberateVersus({
+      itemName: trial.itemName as string,
+      price: trial.price as number,
+      reason: trial.reason as string | null,
+      itemNameB: (trial.itemNameB as string) ?? "",
+      priceB: (trial.priceB as number) ?? 0,
+      reasonB: trial.reasonB as string | null,
+    });
+
+    const gauges = Object.fromEntries(
+      judgment.jurors.map((j) => [j.juror, j.scoreA]),
+    );
+    const gaugesB = Object.fromEntries(
+      judgment.jurors.map((j) => [j.juror, j.scoreB]),
+    );
+
+    return this.prisma.trial.update({
+      where: { id: trial.id },
+      data: {
+        status: "JUDGED",
+        versusResult: judgment.result,
+        summary: judgment.summary,
+        regretIndex: judgment.regretIndex,
+        jury: judgment.jurors as unknown as Prisma.InputJsonValue,
+        gauges: gauges as unknown as Prisma.InputJsonValue,
+        gaugesB: gaugesB as unknown as Prisma.InputJsonValue,
         followUpDueAt: this.followUpDueDate(),
       },
     });
@@ -128,6 +168,9 @@ export class TrialsService {
     if (trial.defenseClosed) {
       throw new BadRequestException("이미 변론이 종료된 사건입니다.");
     }
+    if (trial.mode === "VERSUS") {
+      return this.defendVersus(trial, dto);
+    }
 
     const jury = (trial.jury as unknown as JuryOpinion[]) ?? [];
     if (jury.length === 0) {
@@ -138,12 +181,17 @@ export class TrialsService {
       (trial.gauges as Record<string, number> | null) ??
       DefenseService.initialGauges(jury);
 
+    const history = trial.messages
+      .map((m) => (m.role === "USER" ? `피고인: ${m.content}` : `${m.juror}: ${m.content}`))
+      .join("\n");
+
     const reactions = await this.defense.evaluate({
       itemName: trial.itemName,
       price: trial.price,
       reason: trial.reason,
       gauges: currentGauges,
       message: dto.message,
+      history,
     });
 
     // 게이지 적용 + 배심원 표 재판정
@@ -189,6 +237,85 @@ export class TrialsService {
         ...(defenseClosed
           ? { summary: this.verdict.composeSummary(nextJury, verdict) }
           : {}),
+      },
+      include: { messages: { orderBy: { createdAt: "asc" } } },
+    });
+  }
+
+  /** VERSUS 변론: 추가 진술 하나로 A·B 점수를 동시 재평가 후 저울 재판정. */
+  private async defendVersus(
+    trial: Awaited<ReturnType<TrialsService["findOne"]>>,
+    dto: DefenseDto,
+  ) {
+    const jurors = (trial.jury as unknown as VersusJurorScore[]) ?? [];
+    if (jurors.length === 0) {
+      throw new BadRequestException("판결 정보가 없어 변론할 수 없습니다.");
+    }
+
+    const gaugesA =
+      (trial.gauges as Record<string, number> | null) ??
+      Object.fromEntries(jurors.map((j) => [j.juror, j.scoreA]));
+    const gaugesB =
+      (trial.gaugesB as Record<string, number> | null) ??
+      Object.fromEntries(jurors.map((j) => [j.juror, j.scoreB]));
+
+    const history = trial.messages
+      .map((m) => (m.role === "USER" ? `피고인: ${m.content}` : `${m.juror}: ${m.content}`))
+      .join("\n");
+
+    const reactions = await this.defense.evaluateVersus({
+      itemName: trial.itemName,
+      price: trial.price,
+      reason: trial.reason,
+      itemNameB: trial.itemNameB ?? "",
+      priceB: trial.priceB ?? 0,
+      reasonB: trial.reasonB,
+      gaugesA,
+      gaugesB,
+      message: dto.message,
+      history,
+    });
+
+    const nextA: Record<string, number> = { ...gaugesA };
+    const nextB: Record<string, number> = { ...gaugesB };
+    const byJuror = new Map(reactions.map((r) => [r.juror, r]));
+    const nextJurors: VersusJurorScore[] = jurors.map((j) => {
+      const r = byJuror.get(j.juror);
+      const scoreA = this.clampGauge(j.scoreA + (r?.deltaA ?? 0));
+      const scoreB = this.clampGauge(j.scoreB + (r?.deltaB ?? 0));
+      nextA[j.juror] = scoreA;
+      nextB[j.juror] = scoreB;
+      return { ...j, scoreA, scoreB };
+    });
+
+    const versusResult = resolveVersus(nextJurors);
+    const round = trial.defenseRounds + 1;
+    // ponytail: versus는 3라운드 고정. 박빙 연장전은 필요해지면 추가.
+    const defenseClosed = round >= BASE_DEFENSE_ROUNDS;
+
+    await this.prisma.trialMessage.createMany({
+      data: [
+        { trialId: trial.id, role: "USER", content: dto.message, round },
+        ...reactions.map((r) => ({
+          trialId: trial.id,
+          role: "JUROR" as const,
+          juror: r.juror,
+          emoji: r.emoji,
+          content: r.reply,
+          round,
+        })),
+      ],
+    });
+
+    return this.prisma.trial.update({
+      where: { id: trial.id },
+      data: {
+        jury: nextJurors as unknown as Prisma.InputJsonValue,
+        versusResult,
+        gauges: nextA as unknown as Prisma.InputJsonValue,
+        gaugesB: nextB as unknown as Prisma.InputJsonValue,
+        defenseRounds: round,
+        defenseClosed,
       },
       include: { messages: { orderBy: { createdAt: "asc" } } },
     });
