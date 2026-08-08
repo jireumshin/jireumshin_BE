@@ -24,5 +24,10 @@ services:
       KAKAO_REDIRECT_URI: ${KAKAO_REDIRECT_URI:-https://api.jireumshin.shop/auth/kakao/callback}
       GEMINI_MODEL: ${GEMINI_MODEL:-gemini-flash-latest}
       GEMINI_API_KEY: ${GEMINI_API_KEY}
+      AWS_REGION: ${AWS_REGION:-ap-northeast-2}
+      S3_UPLOAD_BUCKET: ${S3_UPLOAD_BUCKET}
+      S3_PUBLIC_BASE_URL: ${S3_PUBLIC_BASE_URL}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
     restart: unless-stopped
 # DB(Postgres)는 Prisma 붙이는 단계에서 추가 예정
