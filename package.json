@@ -35,6 +35,7 @@
     "nodemailer": "^9.0.3",
     "passport": "^0.7.0",
     "passport-jwt": "^4.0.1",
+    "prisma": "^6",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.1",
     "swagger-ui-express": "^5.0.1"
@@ -51,7 +52,6 @@
     "@types/passport-jwt": "^4.0.1",
     "jest": "^30.4.2",
     "prettier": "^3.3.3",
-    "prisma": "^6",
     "source-map-support": "^0.5.21",
     "ts-jest": "^29.4.12",
     "ts-loader": "^9.5.1",

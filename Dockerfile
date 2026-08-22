@@ -17,7 +17,8 @@ ENV NODE_ENV=production
 RUN corepack enable
 
 COPY package.json yarn.lock .yarnrc.yml ./
-RUN yarn install --immutable
+# 런타임 의존성만 설치 (devDeps 제외로 이미지 대폭 축소). prisma CLI는 deps로 옮겨 migrate 유지.
+RUN yarn plugin import workspace-tools && yarn workspaces focus --production
 
 COPY prisma ./prisma
 RUN yarn prisma generate

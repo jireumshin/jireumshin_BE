@@ -30,4 +30,10 @@ services:
       AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
       AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
     restart: unless-stopped
+    # 컨테이너 로그 무한 증가 방지 (디스크 잠식 차단)
+    logging:
+      driver: json-file
+      options:
+        max-size: '10m'
+        max-file: '3'
 # DB(Postgres)는 Prisma 붙이는 단계에서 추가 예정
