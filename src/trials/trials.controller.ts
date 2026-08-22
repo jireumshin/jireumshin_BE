@@ -1,9 +1,11 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   Param,
   Post,
+  Query,
   Req,
   UseGuards,
 } from '@nestjs/common';
@@ -37,10 +39,51 @@ export class TrialsController {
     return this.trialsService.findMine(userId);
   }
 
+  // 정적 경로는 :id 파라미터 경로보다 먼저 선언 (라우팅 충돌 방지)
+  @Get('feed')
+  @UseGuards(OptionalJwtAuthGuard)
+  @ApiOperation({ summary: '공개된 판례 피드 (최신순, 커서 페이지네이션)' })
+  feed(
+    @Req() req: Request,
+    @Query('cursor') cursor?: string,
+    @Query('limit') limit?: string,
+  ) {
+    const userId = (req.user as { userId?: string } | undefined)?.userId;
+    return this.trialsService.feed({
+      cursor,
+      limit: limit ? Number(limit) : undefined,
+      userId,
+    });
+  }
+
   @Get(':id')
   @ApiOperation({ summary: '사건 조회' })
   findOne(@Param('id') id: string) {
     return this.trialsService.findOne(id);
+  }
+
+  @Post(':id/publish')
+  @UseGuards(JwtAuthGuard)
+  @ApiOperation({ summary: '판례를 피드에 공개 (본인·판결난 사건)' })
+  publish(@Param('id') id: string, @Req() req: Request) {
+    const { userId } = req.user as { userId: string };
+    return this.trialsService.publish(id, userId);
+  }
+
+  @Delete(':id/publish')
+  @UseGuards(JwtAuthGuard)
+  @ApiOperation({ summary: '피드 공개 취소 (본인)' })
+  unpublish(@Param('id') id: string, @Req() req: Request) {
+    const { userId } = req.user as { userId: string };
+    return this.trialsService.unpublish(id, userId);
+  }
+
+  @Post(':id/like')
+  @UseGuards(JwtAuthGuard)
+  @ApiOperation({ summary: '공감 토글 (공개 판례)' })
+  like(@Param('id') id: string, @Req() req: Request) {
+    const { userId } = req.user as { userId: string };
+    return this.trialsService.toggleLike(id, userId);
   }
 
   @Post(':id/verdict')

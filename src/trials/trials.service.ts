@@ -156,6 +156,113 @@ export class TrialsService {
     });
   }
 
+  // ── 판례 탐색 피드 ──
+
+  /** 피드에 노출할 판례 필드 (익명 — userId 등 소유자 정보 제외) */
+  private static readonly FEED_SELECT = {
+    id: true,
+    itemName: true,
+    price: true,
+    reason: true,
+    imageUrl: true,
+    mode: true,
+    verdict: true,
+    summary: true,
+    regretIndex: true,
+    jury: true,
+    itemNameB: true,
+    priceB: true,
+    reasonB: true,
+    imageUrlB: true,
+    versusResult: true,
+    likeCount: true,
+    publishedAt: true,
+  } as const;
+
+  /** 공개된 판례 피드 (최신 공개순, 커서 페이지네이션). userId 있으면 공감 여부 포함. */
+  async feed(params: { cursor?: string; limit?: number; userId?: string }) {
+    const take = Math.min(Math.max(params.limit ?? 20, 1), 50);
+    const trials = await this.prisma.trial.findMany({
+      where: { isPublic: true, status: "JUDGED" },
+      orderBy: [{ publishedAt: "desc" }, { id: "desc" }],
+      take: take + 1, // 다음 페이지 존재 여부 판별용 +1
+      ...(params.cursor
+        ? { cursor: { id: params.cursor }, skip: 1 }
+        : {}),
+      select: {
+        ...TrialsService.FEED_SELECT,
+        ...(params.userId
+          ? { likes: { where: { userId: params.userId }, select: { id: true } } }
+          : {}),
+      },
+    });
+
+    const hasMore = trials.length > take;
+    const page = hasMore ? trials.slice(0, take) : trials;
+    const items = page.map((t) => {
+      const { likes, ...rest } = t as typeof t & { likes?: unknown[] };
+      return { ...rest, likedByMe: Array.isArray(likes) && likes.length > 0 };
+    });
+    return { items, nextCursor: hasMore ? page[page.length - 1].id : null };
+  }
+
+  /** 판례를 피드에 공개 (본인·판결난 사건만, 멱등). */
+  async publish(id: string, userId: string) {
+    const trial = await this.findOne(id);
+    if (trial.userId !== userId) {
+      throw new ForbiddenException("본인 판례만 공개할 수 있습니다.");
+    }
+    if (trial.status !== "JUDGED") {
+      throw new BadRequestException("판결난 판례만 공개할 수 있습니다.");
+    }
+    if (trial.isPublic) return trial;
+    return this.prisma.trial.update({
+      where: { id },
+      data: { isPublic: true, publishedAt: new Date() },
+    });
+  }
+
+  /** 피드 공개 취소 (본인만). */
+  async unpublish(id: string, userId: string) {
+    const trial = await this.findOne(id);
+    if (trial.userId !== userId) {
+      throw new ForbiddenException("본인 판례만 비공개할 수 있습니다.");
+    }
+    return this.prisma.trial.update({
+      where: { id },
+      data: { isPublic: false, publishedAt: null },
+    });
+  }
+
+  /** 공감 토글 (유저당 판례 1회). 반환: 현재 공감 상태·총 공감 수. */
+  async toggleLike(id: string, userId: string) {
+    const trial = await this.prisma.trial.findUnique({
+      where: { id },
+      select: { isPublic: true },
+    });
+    if (!trial) throw new NotFoundException("해당 사건을 찾을 수 없습니다.");
+    if (!trial.isPublic) {
+      throw new BadRequestException("공개되지 않은 판례입니다.");
+    }
+
+    const existing = await this.prisma.trialLike.findUnique({
+      where: { trialId_userId: { trialId: id, userId } },
+    });
+
+    const [, updated] = await this.prisma.$transaction([
+      existing
+        ? this.prisma.trialLike.delete({ where: { id: existing.id } })
+        : this.prisma.trialLike.create({ data: { trialId: id, userId } }),
+      this.prisma.trial.update({
+        where: { id },
+        data: { likeCount: { [existing ? "decrement" : "increment"]: 1 } },
+        select: { likeCount: true },
+      }),
+    ]);
+
+    return { liked: !existing, likeCount: updated.likeCount };
+  }
+
   /**
    * 배심원 변론(설득) 한 라운드. 판결난 사건에서만, 라운드가 남아 있을 때만 가능.
    * 게이지를 갱신해 표를 재판정하고, 다수결로 판결을 다시 계산한다.
