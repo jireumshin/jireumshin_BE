@@ -131,9 +131,9 @@ export class TrialsService {
     });
   }
 
-  /** 판결 후 재질문이 열리는 시각. 지연은 env로 조정(기본 90일, 로컬 테스트는 0). */
+  /** 판결 후 재질문이 열리는 시각. 지연은 env로 조정(기본 3일, 로컬 테스트는 0). */
   private followUpDueDate(): Date {
-    const days = Number(this.config.get("FOLLOW_UP_DELAY_DAYS") ?? 90);
+    const days = Number(this.config.get("FOLLOW_UP_DELAY_DAYS") ?? 3);
     return new Date(Date.now() + days * 86_400_000);
   }
 
