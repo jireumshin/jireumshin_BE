@@ -69,6 +69,52 @@ export class TrialsService {
     return trial;
   }
 
+  /**
+   * 사건 조회(뷰어 기준). 본인/익명(미소유) 판례는 전체를,
+   * 타인의 공개 판례는 개인정보를 제거한 요약본을 반환한다. 타인의 비공개 판례는 404.
+   */
+  async viewForUser(id: string, viewerId?: string) {
+    const trial = await this.findOne(id);
+    const isOwner = !!viewerId && trial.userId === viewerId;
+    // 익명(미소유) 판례는 id 자체가 열람 권한 → 기존처럼 전체 반환
+    if (isOwner || trial.userId === null) return trial;
+    // 타인의 판례: 공개된 것만, 그마저도 요약본으로
+    if (!trial.isPublic) {
+      throw new NotFoundException("해당 사건을 찾을 수 없습니다.");
+    }
+    const likedByMe = viewerId
+      ? !!(await this.prisma.trialLike.findUnique({
+          where: { trialId_userId: { trialId: id, userId: viewerId } },
+        }))
+      : false;
+    return TrialsService.toPublicSummary(trial, likedByMe);
+  }
+
+  /**
+   * 공유용 공개본 — 판결 화면은 소유자와 동일하게 보이되(기소 사유·배심원 평결 포함),
+   * 개인정보·비공개 대화만 제거: 소유자 식별정보, 변론 채팅 로그, 변론 진행상태, 후회 응답.
+   */
+  private static toPublicSummary(
+    trial: Awaited<ReturnType<TrialsService["findOne"]>>,
+    likedByMe: boolean,
+  ) {
+    const {
+      userId: _userId,
+      messages: _messages,
+      gauges: _gauges,
+      gaugesB: _gaugesB,
+      defenseRounds: _defenseRounds,
+      defenseClosed: _defenseClosed,
+      purchased: _purchased,
+      regret: _regret,
+      followedUpAt: _followedUpAt,
+      followUpDueAt: _followUpDueAt,
+      followUpNotifiedAt: _followUpNotifiedAt,
+      ...visible
+    } = trial;
+    return { ...visible, likedByMe, isPublicView: true };
+  }
+
   /** 심리 실행 후 판결 저장. 이미 판결난 사건은 그대로 반환. */
   async judge(id: string) {
     const trial = await this.findOne(id);

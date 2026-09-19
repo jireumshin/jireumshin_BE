@@ -57,9 +57,11 @@ export class TrialsController {
   }
 
   @Get(':id')
-  @ApiOperation({ summary: '사건 조회' })
-  findOne(@Param('id') id: string) {
-    return this.trialsService.findOne(id);
+  @UseGuards(OptionalJwtAuthGuard)
+  @ApiOperation({ summary: '사건 조회 (타인 공개 판례는 요약본)' })
+  findOne(@Param('id') id: string, @Req() req: Request) {
+    const userId = (req.user as { userId?: string } | undefined)?.userId;
+    return this.trialsService.viewForUser(id, userId);
   }
 
   @Post(':id/publish')
