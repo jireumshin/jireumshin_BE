@@ -27,7 +27,12 @@ export class UploadsService {
     this.publicBase =
       this.config.get<string>("S3_PUBLIC_BASE_URL") ??
       `https://${this.bucket}.s3.${region}.amazonaws.com`;
-    this.client = new S3Client({ region });
+    // S3 호환 저장소(Supabase Storage 등)는 endpoint + path-style 필요
+    const endpoint = this.config.get<string>("S3_ENDPOINT");
+    this.client = new S3Client({
+      region,
+      ...(endpoint && { endpoint, forcePathStyle: true }),
+    });
   }
 
   get enabled(): boolean {
