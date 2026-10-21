@@ -20,6 +20,7 @@ model User {
   password   String? // bcrypt 해시 (카카오 로그인은 없음)
   provider   AuthProvider @default(LOCAL) // 최초 가입 경로
   providerId String?      @unique // 카카오 고유 id (LOCAL 계정에 연동돼도 채워짐)
+  avatar     String? // 프로필 캐릭터 key (null이면 judge)
   createdAt  DateTime     @default(now())
   updatedAt  DateTime     @updatedAt
 

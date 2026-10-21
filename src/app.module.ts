@@ -6,6 +6,7 @@ import { TrialsModule } from './trials/trials.module';
 import { AuthModule } from './auth/auth.module';
 import { MailModule } from './mail/mail.module';
 import { UploadsModule } from './uploads/uploads.module';
+import { OptionsModule } from './options/options.module';
 
 @Module({
   imports: [
@@ -15,6 +16,7 @@ import { UploadsModule } from './uploads/uploads.module';
     TrialsModule,
     AuthModule,
     UploadsModule,
+    OptionsModule,
   ],
   controllers: [HealthController],
 })

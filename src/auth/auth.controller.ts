@@ -20,6 +20,7 @@ import { SignupDto } from './dto/signup.dto';
 import { LoginDto } from './dto/login.dto';
 import { ResetPasswordDto, ResetRequestDto } from './dto/reset-password.dto';
 import { UpdateNicknameDto } from './dto/update-nickname.dto';
+import { UpdateAvatarDto } from './dto/update-avatar.dto';
 import { JwtAuthGuard } from './jwt-auth.guard';
 import {
   ACCESS_TOKEN_COOKIE,
@@ -86,6 +87,14 @@ export class AuthController {
   updateNickname(@Req() req: Request, @Body() dto: UpdateNicknameDto) {
     const { userId } = req.user as { userId: string };
     return this.authService.updateNickname(userId, dto.nickname);
+  }
+
+  @Patch('avatar')
+  @UseGuards(JwtAuthGuard)
+  @ApiOperation({ summary: '프로필 캐릭터 변경' })
+  updateAvatar(@Req() req: Request, @Body() dto: UpdateAvatarDto) {
+    const { userId } = req.user as { userId: string };
+    return this.authService.updateAvatar(userId, dto.avatar);
   }
 
   @Post('password/reset-request')

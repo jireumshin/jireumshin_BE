@@ -15,6 +15,7 @@ import { MailService } from "../mail/mail.service";
 import { passwordResetEmail } from "../mail/templates/password-reset.template";
 import { SignupDto } from "./dto/signup.dto";
 import type { KakaoProfile } from "./kakao.service";
+import { DEFAULT_AVATAR, avatarUrl } from "../options/avatars";
 
 const SALT_ROUNDS = 10;
 const RESET_TOKEN_TTL_MS = 30 * 60 * 1000; // 30분
@@ -25,6 +26,8 @@ export type SafeUser = {
   email: string | null; // 카카오 유저는 이메일 동의를 거부할 수 있음
   nickname: string;
   provider: string;
+  avatar: string;
+  avatarUrl: string;
   createdAt: Date;
 };
 
@@ -95,6 +98,14 @@ export class AuthService {
     const user = await this.prisma.user.update({
       where: { id: userId },
       data: { nickname },
+    });
+    return this.toSafeUser(user);
+  }
+
+  async updateAvatar(userId: string, avatar: string): Promise<SafeUser> {
+    const user = await this.prisma.user.update({
+      where: { id: userId },
+      data: { avatar },
     });
     return this.toSafeUser(user);
   }
@@ -228,6 +239,7 @@ export class AuthService {
     email: string | null;
     nickname: string;
     provider: string;
+    avatar: string | null;
     createdAt: Date;
   }): SafeUser {
     return {
@@ -235,6 +247,11 @@ export class AuthService {
       email: user.email,
       nickname: user.nickname,
       provider: user.provider,
+      avatar: user.avatar ?? DEFAULT_AVATAR,
+      avatarUrl: avatarUrl(
+        this.config.get<string>("S3_PUBLIC_BASE_URL") ?? "",
+        user.avatar,
+      ),
       createdAt: user.createdAt,
     };
   }

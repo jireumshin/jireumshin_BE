@@ -17,6 +17,7 @@ import {
   isDefenseClosed,
   BASE_DEFENSE_ROUNDS,
 } from "./defense.service";
+import { avatarUrl } from "../options/avatars";
 
 @Injectable()
 export class TrialsService {
@@ -223,6 +224,7 @@ export class TrialsService {
     versusResult: true,
     likeCount: true,
     publishedAt: true,
+    user: { select: { avatar: true } }, // 작성자 캐릭터만 (닉네임·id 비노출)
   } as const;
 
   /** 공개된 판례 피드 (최신 공개순, 커서 페이지네이션). userId 있으면 공감 여부 포함. */
@@ -245,9 +247,14 @@ export class TrialsService {
 
     const hasMore = trials.length > take;
     const page = hasMore ? trials.slice(0, take) : trials;
+    const base = this.config.get<string>("S3_PUBLIC_BASE_URL") ?? "";
     const items = page.map((t) => {
-      const { likes, ...rest } = t as typeof t & { likes?: unknown[] };
-      return { ...rest, likedByMe: Array.isArray(likes) && likes.length > 0 };
+      const { likes, user, ...rest } = t as typeof t & { likes?: unknown[] };
+      return {
+        ...rest,
+        authorAvatarUrl: avatarUrl(base, user?.avatar),
+        likedByMe: Array.isArray(likes) && likes.length > 0,
+      };
     });
     return { items, nextCursor: hasMore ? page[page.length - 1].id : null };
   }
