@@ -1,6 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { Cron, CronExpression } from '@nestjs/schedule';
 import { PrismaService } from '../prisma/prisma.service';
 import { MailService } from '../mail/mail.service';
 
@@ -15,12 +14,6 @@ export class FollowUpReminderService {
     private readonly mail: MailService,
     private readonly config: ConfigService,
   ) {}
-
-  // 매일 오전 10시(KST) 재질문 시점이 지난 미발송 판례에 알림 메일 발송
-  @Cron(CronExpression.EVERY_DAY_AT_10AM, { timeZone: 'Asia/Seoul' })
-  handleDailyReminders() {
-    return this.sendDueReminders();
-  }
 
   // 재질문 대상: 판결났고, 재질문 시점 지났고, 아직 미응답·미발송이며, 이메일이 있는 유저의 판례
   findDueForReminder(limit = BATCH_LIMIT) {
