@@ -1,0 +1,40 @@
+name: Render deploy
+
+# 배포는 Render 자동배포가 담당 — 이 워크플로는 해당 커밋의 배포 결과를 GitHub 체크로 보여주기만 함
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: render-deploy-status
+  cancel-in-progress: true
+
+jobs:
+  wait-for-deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      SERVICE_ID: srv-dbc8ga4s728c73ebk1mg
+    steps:
+      - name: Wait for Render deploy of this commit
+        env:
+          RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+          SHA: ${{ github.sha }}
+        run: |
+          for i in $(seq 1 90); do
+            STATUS=$(curl -fsS \
+              -H "Authorization: Bearer $RENDER_API_KEY" -H "Accept: application/json" \
+              "https://api.render.com/v1/services/$SERVICE_ID/deploys?limit=10" \
+              | jq -r --arg sha "$SHA" '[.[].deploy | select(.commit.id == $sha)][0].status // "waiting"')
+            echo "[$i] $STATUS"
+            case "$STATUS" in
+              live|deactivated) exit 0 ;;   # deactivated = 라이브 후 더 새 배포로 교체됨
+              build_failed|update_failed|pre_deploy_failed|canceled) exit 1 ;;
+            esac
+            sleep 10
+          done
+          echo "15분 내 배포 완료 안 됨"; exit 1
+
+      - name: Verify /health
+        run: curl -fsS --retry 5 --retry-delay 5 --retry-all-errors https://api.jireumshin.shop/health
