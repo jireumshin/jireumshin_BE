@@ -88,11 +88,23 @@ export class TrialsService {
           where: { trialId_userId: { trialId: id, userId: viewerId } },
         }))
       : false;
-    return TrialsService.toPublicSummary(trial, likedByMe);
+    // 공개는 opt-in이라 작성자 닉네임·캐릭터는 함께 노출 (id·이메일은 비노출)
+    const author = await this.prisma.user.findUnique({
+      where: { id: trial.userId },
+      select: { nickname: true, avatar: true },
+    });
+    return {
+      ...TrialsService.toPublicSummary(trial, likedByMe),
+      authorNickname: author?.nickname ?? null,
+      authorAvatarUrl: avatarUrl(
+        this.config.get<string>("S3_PUBLIC_BASE_URL") ?? "",
+        author?.avatar,
+      ),
+    };
   }
 
   /**
-   * 공유용 공개본 — 판결 화면은 소유자와 동일하게 보이되(기소 사유·배심원 평결 포함),
+   * 공유용 공개본 — 판결 화면은 소유자와 동일하게 보이되(기소 사유·배심원 평결 포함, 작성자 닉네임은 viewForUser에서 추가),
    * 개인정보·비공개 대화만 제거: 소유자 식별정보, 변론 채팅 로그, 변론 진행상태, 후회 응답.
    */
   private static toPublicSummary(
@@ -224,7 +236,7 @@ export class TrialsService {
     versusResult: true,
     likeCount: true,
     publishedAt: true,
-    user: { select: { avatar: true } }, // 작성자 캐릭터만 (닉네임·id 비노출)
+    user: { select: { nickname: true, avatar: true } }, // 작성자 닉네임·캐릭터만 (id·이메일 비노출)
   } as const;
 
   /** 공개된 판례 피드 (최신 공개순, 커서 페이지네이션). userId 있으면 공감 여부 포함. */
@@ -252,6 +264,7 @@ export class TrialsService {
       const { likes, user, ...rest } = t as typeof t & { likes?: unknown[] };
       return {
         ...rest,
+        authorNickname: user?.nickname ?? null,
         authorAvatarUrl: avatarUrl(base, user?.avatar),
         likedByMe: Array.isArray(likes) && likes.length > 0,
       };
