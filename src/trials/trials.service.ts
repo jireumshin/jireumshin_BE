@@ -394,6 +394,8 @@ export class TrialsService {
           emoji: r.emoji,
           content: r.reply,
           round,
+          // 실제 적용된(0~100 클램프 후) 변화량
+          ...TrialsService.gaugeLog(currentGauges, gauges, r.juror),
         })),
       ],
     });
@@ -413,6 +415,17 @@ export class TrialsService {
       },
       include: { messages: { orderBy: { createdAt: "asc" } } },
     });
+  }
+
+  /** 배심원 답변 메시지에 남길 이번 라운드 게이지 기록 (모르는 배심원이면 null) */
+  private static gaugeLog(
+    before: Record<string, number>,
+    after: Record<string, number>,
+    juror: string,
+  ) {
+    const now = after[juror];
+    if (typeof now !== "number") return { gauge: null, gaugeDelta: null };
+    return { gauge: now, gaugeDelta: now - (before[juror] ?? now) };
   }
 
   /** VERSUS 변론: 추가 진술 하나로 A·B 점수를 동시 재평가 후 저울 재판정. */
@@ -469,14 +482,20 @@ export class TrialsService {
     await this.prisma.trialMessage.createMany({
       data: [
         { trialId: trial.id, role: "USER", content: dto.message, round },
-        ...reactions.map((r) => ({
-          trialId: trial.id,
-          role: "JUROR" as const,
-          juror: r.juror,
-          emoji: r.emoji,
-          content: r.reply,
-          round,
-        })),
+        ...reactions.map((r) => {
+          const logB = TrialsService.gaugeLog(gaugesB, nextB, r.juror);
+          return {
+            trialId: trial.id,
+            role: "JUROR" as const,
+            juror: r.juror,
+            emoji: r.emoji,
+            content: r.reply,
+            round,
+            ...TrialsService.gaugeLog(gaugesA, nextA, r.juror),
+            gaugeB: logB.gauge,
+            gaugeDeltaB: logB.gaugeDelta,
+          };
+        }),
       ],
     });
 
