@@ -468,7 +468,10 @@ export class VerdictService {
     return pool[pick % pool.length];
   }
 
-  private versusSummary(result: VersusResultType, input: VersusInput): string {
+  versusSummary(
+    result: VersusResultType,
+    input: Pick<VersusInput, "itemName" | "itemNameB">,
+  ): string {
     if (result === "NEITHER") {
       return "배심원단은 지금은 둘 다 별로라고 봤어요. 급하지 않다면 잠시 참아봐요.";
     }

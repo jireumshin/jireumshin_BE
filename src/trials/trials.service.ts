@@ -10,13 +10,18 @@ import { PrismaService } from "../prisma/prisma.service";
 import { CreateTrialDto } from "./dto/create-trial.dto";
 import { FollowUpDto } from "./dto/follow-up.dto";
 import { DefenseDto } from "./dto/defense.dto";
-import { VerdictService, resolveVerdict, resolveVersus } from "./verdict.service";
+import {
+  VerdictService,
+  resolveVerdict,
+  resolveVersus,
+} from "./verdict.service";
 import type { JuryOpinion, VersusJurorScore } from "./verdict.service";
 import {
   DefenseService,
   isDefenseClosed,
   BASE_DEFENSE_ROUNDS,
 } from "./defense.service";
+import type { FinalizeResult } from "./defense.service";
 import { avatarUrl } from "../options/avatars";
 
 @Injectable()
@@ -246,13 +251,13 @@ export class TrialsService {
       where: { isPublic: true, status: "JUDGED" },
       orderBy: [{ publishedAt: "desc" }, { id: "desc" }],
       take: take + 1, // 다음 페이지 존재 여부 판별용 +1
-      ...(params.cursor
-        ? { cursor: { id: params.cursor }, skip: 1 }
-        : {}),
+      ...(params.cursor ? { cursor: { id: params.cursor }, skip: 1 } : {}),
       select: {
         ...TrialsService.FEED_SELECT,
         ...(params.userId
-          ? { likes: { where: { userId: params.userId }, select: { id: true } } }
+          ? {
+              likes: { where: { userId: params.userId }, select: { id: true } },
+            }
           : {}),
       },
     });
@@ -355,7 +360,9 @@ export class TrialsService {
       DefenseService.initialGauges(jury);
 
     const history = trial.messages
-      .map((m) => (m.role === "USER" ? `피고인: ${m.content}` : `${m.juror}: ${m.content}`))
+      .map((m) =>
+        m.role === "USER" ? `피고인: ${m.content}` : `${m.juror}: ${m.content}`,
+      )
       .join("\n");
 
     const reactions = await this.defense.evaluate({
@@ -400,21 +407,66 @@ export class TrialsService {
       ],
     });
 
+    // 변론 종료 시 대화 전체를 종합한 최종 판결문 (실패 시 null → 최근 반응·규칙기반 요지)
+    const final = defenseClosed
+      ? await this.defense.finalize({
+          caseText: `물건: ${trial.itemName} / ${trial.price.toLocaleString("ko-KR")}원 / 이유: ${trial.reason ?? "(이유 없음)"}`,
+          jurors: nextJury
+            .map(
+              (j) =>
+                `${j.juror}: 1심 "${j.argument}" → 최종 ${j.vote === "GUILTY" ? "유죄" : "무죄"} (게이지 ${gauges[j.juror]})`,
+            )
+            .join("\n"),
+          outcome: verdict === "GUILTY" ? "유죄(사지 마)" : "무죄(사도 됨)",
+          history: TrialsService.historyWith(history, dto.message, reactions),
+        })
+      : null;
+
     return this.prisma.trial.update({
       where: { id },
       data: {
-        jury: nextJury as unknown as Prisma.InputJsonValue,
+        jury: TrialsService.withFinal(
+          nextJury,
+          final,
+        ) as unknown as Prisma.InputJsonValue,
         verdict,
         gauges: gauges as unknown as Prisma.InputJsonValue,
         defenseRounds: round,
         defenseClosed,
-        // 변론이 끝나면 최종 배심원 구성에 맞춰 요지를 다시 쓴다 (1심 요지와의 불일치 방지)
-        ...(defenseClosed
-          ? { summary: this.verdict.composeSummary(nextJury, verdict) }
-          : {}),
+        // 판결이 뒤집힌 라운드·변론 종료 시 요지를 다시 쓴다 (그대로면 1심 요지 유지)
+        ...(final
+          ? { summary: final.summary, regretIndex: final.regretIndex }
+          : defenseClosed || verdict !== trial.verdict
+            ? { summary: this.verdict.composeSummary(nextJury, verdict) }
+            : {}),
       },
       include: { messages: { orderBy: { createdAt: "asc" } } },
     });
+  }
+
+  /** 지난 대화 + 이번 라운드 (최종 판결문 입력용) */
+  private static historyWith(
+    history: string,
+    message: string,
+    reactions: { juror: string; reply: string }[],
+  ): string {
+    return [
+      history,
+      `피고인: ${message}`,
+      ...reactions.map((r) => `${r.juror}: ${r.reply}`),
+    ]
+      .filter(Boolean)
+      .join("\n");
+  }
+
+  /** 최종 판결문이 있으면 배심원별 finalArgument를 붙인다 (1심 argument는 0라운드용으로 유지) */
+  private static withFinal<T extends { juror: string }>(
+    jury: T[],
+    final: FinalizeResult | null,
+  ): (T & { finalArgument?: string })[] {
+    return final
+      ? jury.map((j) => ({ ...j, finalArgument: final.opinions[j.juror] }))
+      : jury;
   }
 
   /** 배심원 답변 메시지에 남길 이번 라운드 게이지 기록 (모르는 배심원이면 null) */
@@ -446,7 +498,9 @@ export class TrialsService {
       Object.fromEntries(jurors.map((j) => [j.juror, j.scoreB]));
 
     const history = trial.messages
-      .map((m) => (m.role === "USER" ? `피고인: ${m.content}` : `${m.juror}: ${m.content}`))
+      .map((m) =>
+        m.role === "USER" ? `피고인: ${m.content}` : `${m.juror}: ${m.content}`,
+      )
       .join("\n");
 
     const reactions = await this.defense.evaluateVersus({
@@ -499,15 +553,52 @@ export class TrialsService {
       ],
     });
 
+    const won = (n: number) => `${n.toLocaleString("ko-KR")}원`;
+    const final = defenseClosed
+      ? await this.defense.finalize({
+          caseText: [
+            `A 물건: ${trial.itemName} / ${won(trial.price)} / 이유: ${trial.reason ?? "(이유 없음)"}`,
+            `B 물건: ${trial.itemNameB ?? ""} / ${won(trial.priceB ?? 0)} / 이유: ${trial.reasonB ?? "(이유 없음)"}`,
+          ].join("\n"),
+          jurors: nextJurors
+            .map(
+              (j) =>
+                `${j.juror}: 1심 "${j.argument}" → 최종 점수 A${j.scoreA}/B${j.scoreB}`,
+            )
+            .join("\n"),
+          outcome:
+            versusResult === "A"
+              ? `A(${trial.itemName}) 선택`
+              : versusResult === "B"
+                ? `B(${trial.itemNameB ?? ""}) 선택`
+                : "둘 다 별로",
+          history: TrialsService.historyWith(history, dto.message, reactions),
+        })
+      : null;
+
     return this.prisma.trial.update({
       where: { id: trial.id },
       data: {
-        jury: nextJurors as unknown as Prisma.InputJsonValue,
+        jury: TrialsService.withFinal(
+          nextJurors,
+          final,
+        ) as unknown as Prisma.InputJsonValue,
         versusResult,
         gauges: nextA as unknown as Prisma.InputJsonValue,
         gaugesB: nextB as unknown as Prisma.InputJsonValue,
         defenseRounds: round,
         defenseClosed,
+        // 승자가 바뀐 라운드엔 요지도 맞춰 다시 쓴다 (종료 시엔 최종 판결문)
+        ...(final
+          ? { summary: final.summary, regretIndex: final.regretIndex }
+          : versusResult !== trial.versusResult
+            ? {
+                summary: this.verdict.versusSummary(versusResult, {
+                  itemName: trial.itemName,
+                  itemNameB: trial.itemNameB ?? "",
+                }),
+              }
+            : {}),
       },
       include: { messages: { orderBy: { createdAt: "asc" } } },
     });

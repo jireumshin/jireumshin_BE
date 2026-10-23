@@ -183,6 +183,42 @@ export type VersusReaction = {
   deltaB: number;
 };
 
+export type FinalizeInput = {
+  caseText: string; // 사건 내용 (단일/비교 공통 문자열)
+  jurors: string; // 배심원별 1심 의견·최종 표/점수
+  outcome: string; // 최종 판결 한 줄
+  history: string; // 0라운드 이후 전체 변론 대화
+};
+
+export type FinalizeResult = {
+  opinions: Record<string, string>; // 배심원별 최종 의견
+  summary: string;
+  regretIndex: number;
+};
+
+const FINALIZE_SYSTEM_PROMPT = `너는 "지름신 재판소"의 심리 진행자다. 변론이 모두 끝났다. 1심 의견과 변론 대화 전체를 종합해 최종 판결문을 쓴다.
+
+- opinions: 배심원 4명 각각의 최종 의견 1~2문장. 각자 캐릭터 말투 그대로(가성비요정: 차분하고 얄미운 존댓말·숫자, 텅장지킴이: 조곤조곤 선문답, 지름요정: 밝고 부추기는 😈, 팩트봇: 건조한 수치). 1심 생각에서 변론으로 무엇을 알게 돼 어떻게 결론 냈는지가 드러나야 하며, 반드시 주어진 최종 표/점수와 같은 방향이어야 한다.
+- summary: 최종 판결 요지 1~2문장. 결과를 요약하고 유죄(또는 둘 다 별로)면 참으라는 넛지, 무죄(또는 승자 있음)면 응원.
+- regretIndex: 0~100 정수. 이 결론대로 했을 때 후회할 확률. 변론에서 밝혀진 감당 가능성·사용 빈도를 반영한다.
+- 대화에 없는 사실을 지어내지 마라.`;
+
+const FINALIZE_SCHEMA: Schema = {
+  type: Type.OBJECT,
+  properties: {
+    opinions: {
+      type: Type.OBJECT,
+      properties: Object.fromEntries(
+        JURORS.map((p) => [p.juror, { type: Type.STRING, description: "최종 의견 1~2문장" }]),
+      ),
+      required: JURORS.map((p) => p.juror),
+    },
+    summary: { type: Type.STRING, description: "최종 판결 요지 1~2문장" },
+    regretIndex: { type: Type.INTEGER, description: "후회 확률 0~100" },
+  },
+  required: ["opinions", "summary", "regretIndex"],
+};
+
 @Injectable()
 export class DefenseService {
   private readonly logger = new Logger(DefenseService.name);
@@ -360,6 +396,51 @@ export class DefenseService {
         gaugeDelta: this.clampDelta(r.gaugeDelta),
       };
     });
+  }
+
+  /**
+   * 변론 종료 시 최종 판결문(배심원별 최종 의견·요지·후회지수)을 만든다.
+   * 키가 없거나 실패하면 null — 호출부가 최근 반응·규칙기반 요지로 폴백.
+   */
+  async finalize(input: FinalizeInput): Promise<FinalizeResult | null> {
+    const apiKey = this.config.get<string>("GEMINI_API_KEY");
+    if (!apiKey) return null;
+    try {
+      const ai = new GoogleGenAI({ apiKey });
+      const model =
+        this.config.get<string>("GEMINI_MODEL") ?? "gemini-flash-latest";
+      const res = await this.withTimeout(
+        ai.models.generateContent({
+          model,
+          contents: [
+            input.caseText,
+            `[배심원 1심 의견 → 최종]\n${input.jurors}`,
+            `최종 판결: ${input.outcome}`,
+            `[변론 대화]\n${input.history}`,
+          ].join("\n\n"),
+          config: {
+            systemInstruction: FINALIZE_SYSTEM_PROMPT,
+            responseMimeType: "application/json",
+            responseSchema: FINALIZE_SCHEMA,
+          },
+        }),
+        20_000,
+      );
+      const data = JSON.parse(res.text ?? "") as FinalizeResult;
+      if (!data.summary || JURORS.some((p) => !data.opinions?.[p.juror])) {
+        throw new Error("최종 판결문 필드 누락");
+      }
+      return {
+        opinions: data.opinions,
+        summary: data.summary,
+        regretIndex: Math.max(0, Math.min(100, Math.round(data.regretIndex))),
+      };
+    } catch (error) {
+      this.logger.warn(
+        `최종 판결문 생성 실패, 폴백: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      return null;
+    }
   }
 
   private withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
