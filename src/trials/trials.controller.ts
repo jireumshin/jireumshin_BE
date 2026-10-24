@@ -4,6 +4,7 @@ import {
   Delete,
   Get,
   Param,
+  Patch,
   Post,
   Query,
   Req,
@@ -15,6 +16,7 @@ import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { OptionalJwtAuthGuard } from '../auth/optional-jwt-auth.guard';
 import { CreateTrialDto } from './dto/create-trial.dto';
 import { FollowUpDto } from './dto/follow-up.dto';
+import { MessageVisibilityDto } from './dto/message-visibility.dto';
 import { DefenseDto } from './dto/defense.dto';
 import { TrialsService } from './trials.service';
 
@@ -58,7 +60,7 @@ export class TrialsController {
 
   @Get(':id')
   @UseGuards(OptionalJwtAuthGuard)
-  @ApiOperation({ summary: '사건 조회 (타인 공개 판례는 요약본)' })
+  @ApiOperation({ summary: '사건 조회 (타인 공개 판례는 공개본 — 숨긴 진술·개인정보 제외)' })
   findOne(@Param('id') id: string, @Req() req: Request) {
     const userId = (req.user as { userId?: string } | undefined)?.userId;
     return this.trialsService.viewForUser(id, userId);
@@ -78,6 +80,19 @@ export class TrialsController {
   unpublish(@Param('id') id: string, @Req() req: Request) {
     const { userId } = req.user as { userId: string };
     return this.trialsService.unpublish(id, userId);
+  }
+
+  @Patch(':id/messages/:messageId')
+  @UseGuards(JwtAuthGuard)
+  @ApiOperation({ summary: '공개본에서 변론 진술 숨기기/보이기 (본인 판례)' })
+  setMessageHidden(
+    @Param('id') id: string,
+    @Param('messageId') messageId: string,
+    @Req() req: Request,
+    @Body() dto: MessageVisibilityDto,
+  ) {
+    const { userId } = req.user as { userId: string };
+    return this.trialsService.setMessageHidden(id, messageId, userId, dto.hidden);
   }
 
   @Post(':id/like')

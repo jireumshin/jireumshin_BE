@@ -52,7 +52,7 @@ export class TrialsService {
     return this.prisma.trial.update({
       where: { id },
       data: { userId },
-      include: { messages: { orderBy: { createdAt: "asc" } } },
+      include: { messages: { orderBy: [{ createdAt: "asc" }, { id: "asc" }] } },
     });
   }
 
@@ -67,7 +67,7 @@ export class TrialsService {
   async findOne(id: string) {
     const trial = await this.prisma.trial.findUnique({
       where: { id },
-      include: { messages: { orderBy: { createdAt: "asc" } } },
+      include: { messages: { orderBy: [{ createdAt: "asc" }, { id: "asc" }] } },
     });
     if (!trial) {
       throw new NotFoundException("해당 사건을 찾을 수 없습니다.");
@@ -109,8 +109,8 @@ export class TrialsService {
   }
 
   /**
-   * 공유용 공개본 — 판결 화면은 소유자와 동일하게 보이되(기소 사유·배심원 평결 포함, 작성자 닉네임은 viewForUser에서 추가),
-   * 개인정보·비공개 대화만 제거: 소유자 식별정보, 변론 채팅 로그, 변론 진행상태, 후회 응답.
+   * 공유용 공개본 — 판결 화면·변론 대화까지 소유자와 동일하게 보이되(작성자 닉네임은 viewForUser에서 추가),
+   * 소유자 식별정보·후회 응답은 제거하고 주인이 숨긴 진술은 내용을 비운다.
    */
   private static toPublicSummary(
     trial: Awaited<ReturnType<TrialsService["findOne"]>>,
@@ -118,11 +118,9 @@ export class TrialsService {
   ) {
     const {
       userId: _userId,
-      messages: _messages,
+      messages,
       gauges: _gauges,
       gaugesB: _gaugesB,
-      defenseRounds: _defenseRounds,
-      defenseClosed: _defenseClosed,
       purchased: _purchased,
       regret: _regret,
       followedUpAt: _followedUpAt,
@@ -130,7 +128,12 @@ export class TrialsService {
       followUpNotifiedAt: _followUpNotifiedAt,
       ...visible
     } = trial;
-    return { ...visible, likedByMe, isPublicView: true };
+    return {
+      ...visible,
+      messages: messages.map((m) => (m.hidden ? { ...m, content: null } : m)),
+      likedByMe,
+      isPublicView: true,
+    };
   }
 
   /** 심리 실행 후 판결 저장. 이미 판결난 사건은 그대로 반환. */
@@ -240,6 +243,7 @@ export class TrialsService {
     imageUrlB: true,
     versusResult: true,
     likeCount: true,
+    defenseRounds: true,
     publishedAt: true,
     user: { select: { nickname: true, avatar: true } }, // 작성자 닉네임·캐릭터만 (id·이메일 비노출)
   } as const;
@@ -290,6 +294,7 @@ export class TrialsService {
     return this.prisma.trial.update({
       where: { id },
       data: { isPublic: true, publishedAt: new Date() },
+      include: { messages: { orderBy: [{ createdAt: "asc" }, { id: "asc" }] } },
     });
   }
 
@@ -302,7 +307,29 @@ export class TrialsService {
     return this.prisma.trial.update({
       where: { id },
       data: { isPublic: false, publishedAt: null },
+      include: { messages: { orderBy: [{ createdAt: "asc" }, { id: "asc" }] } },
     });
+  }
+
+  /** 공개본에서 변론 진술 하나를 숨기거나 다시 보이기 (본인만). 갱신된 사건 반환. */
+  async setMessageHidden(
+    id: string,
+    messageId: string,
+    userId: string,
+    hidden: boolean,
+  ) {
+    const trial = await this.findOne(id);
+    if (trial.userId !== userId) {
+      throw new ForbiddenException("본인 판례의 진술만 숨길 수 있습니다.");
+    }
+    if (!trial.messages.some((m) => m.id === messageId)) {
+      throw new NotFoundException("해당 진술을 찾을 수 없습니다.");
+    }
+    await this.prisma.trialMessage.update({
+      where: { id: messageId },
+      data: { hidden },
+    });
+    return this.findOne(id);
   }
 
   /** 공감 토글 (유저당 판례 1회). 반환: 현재 공감 상태·총 공감 수. */
@@ -440,7 +467,7 @@ export class TrialsService {
             ? { summary: this.verdict.composeSummary(nextJury, verdict) }
             : {}),
       },
-      include: { messages: { orderBy: { createdAt: "asc" } } },
+      include: { messages: { orderBy: [{ createdAt: "asc" }, { id: "asc" }] } },
     });
   }
 
@@ -600,7 +627,7 @@ export class TrialsService {
               }
             : {}),
       },
-      include: { messages: { orderBy: { createdAt: "asc" } } },
+      include: { messages: { orderBy: [{ createdAt: "asc" }, { id: "asc" }] } },
     });
   }
 

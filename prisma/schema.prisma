@@ -140,6 +140,7 @@ model TrialMessage {
   gauge       Int? // 변화 후 값
   gaugeDeltaB Int? // VERSUS B 저울 변화량
   gaugeB      Int?
+  hidden      Boolean     @default(false) // 판례 주인이 공개본에서 숨긴 진술
   createdAt   DateTime    @default(now())
 
   @@index([trialId])
