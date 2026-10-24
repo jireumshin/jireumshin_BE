@@ -31,3 +31,30 @@ describe('toPublicSummary', () => {
     expect(pub).not.toHaveProperty('regret');
   });
 });
+
+describe('deleteComment 권한', () => {
+  const comment = { trialId: 't1', userId: 'writer', trial: { userId: 'owner' } };
+  const make = () => {
+    const prisma = {
+      trialComment: { findUnique: jest.fn().mockResolvedValue(comment), delete: jest.fn() },
+      trial: { update: jest.fn() },
+      $transaction: jest.fn().mockResolvedValue([]),
+    };
+    return { prisma, svc: new TrialsService(prisma as any, {} as any, {} as any, {} as any) };
+  };
+
+  it('작성자·판례 주인은 삭제 가능', async () => {
+    for (const userId of ['writer', 'owner']) {
+      const { prisma, svc } = make();
+      await expect(svc.deleteComment('t1', 'c1', userId)).resolves.toEqual({ id: 'c1' });
+      expect(prisma.$transaction).toHaveBeenCalled();
+    }
+  });
+
+  it('제3자는 거절, 다른 판례 id로는 찾을 수 없음', async () => {
+    const { prisma, svc } = make();
+    await expect(svc.deleteComment('t1', 'c1', 'stranger')).rejects.toThrow('삭제할 수 있습니다');
+    await expect(svc.deleteComment('t2', 'c1', 'owner')).rejects.toThrow('찾을 수 없습니다');
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+  });
+});

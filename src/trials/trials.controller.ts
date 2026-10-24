@@ -15,6 +15,7 @@ import { Request } from 'express';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { OptionalJwtAuthGuard } from '../auth/optional-jwt-auth.guard';
 import { CreateTrialDto } from './dto/create-trial.dto';
+import { CreateCommentDto } from './dto/create-comment.dto';
 import { FollowUpDto } from './dto/follow-up.dto';
 import { MessageVisibilityDto } from './dto/message-visibility.dto';
 import { DefenseDto } from './dto/defense.dto';
@@ -93,6 +94,38 @@ export class TrialsController {
   ) {
     const { userId } = req.user as { userId: string };
     return this.trialsService.setMessageHidden(id, messageId, userId, dto.hidden);
+  }
+
+  @Get(':id/comments')
+  @UseGuards(OptionalJwtAuthGuard)
+  @ApiOperation({ summary: '댓글 목록 (공개 판례, 비공개면 주인만)' })
+  listComments(@Param('id') id: string, @Req() req: Request) {
+    const userId = (req.user as { userId?: string } | undefined)?.userId;
+    return this.trialsService.listComments(id, userId);
+  }
+
+  @Post(':id/comments')
+  @UseGuards(JwtAuthGuard)
+  @ApiOperation({ summary: '댓글 작성 (공개 판례)' })
+  createComment(
+    @Param('id') id: string,
+    @Req() req: Request,
+    @Body() dto: CreateCommentDto,
+  ) {
+    const { userId } = req.user as { userId: string };
+    return this.trialsService.createComment(id, userId, dto.content);
+  }
+
+  @Delete(':id/comments/:commentId')
+  @UseGuards(JwtAuthGuard)
+  @ApiOperation({ summary: '댓글 삭제 (작성자 또는 판례 주인)' })
+  deleteComment(
+    @Param('id') id: string,
+    @Param('commentId') commentId: string,
+    @Req() req: Request,
+  ) {
+    const { userId } = req.user as { userId: string };
+    return this.trialsService.deleteComment(id, commentId, userId);
   }
 
   @Post(':id/like')

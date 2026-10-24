@@ -243,6 +243,7 @@ export class TrialsService {
     imageUrlB: true,
     versusResult: true,
     likeCount: true,
+    commentCount: true,
     defenseRounds: true,
     publishedAt: true,
     user: { select: { nickname: true, avatar: true } }, // 작성자 닉네임·캐릭터만 (id·이메일 비노출)
@@ -330,6 +331,100 @@ export class TrialsService {
       data: { hidden },
     });
     return this.findOne(id);
+  }
+
+  // ── 댓글 ──
+
+  /** 댓글 목록 (작성순). 공개 판례는 누구나, 비공개면 주인만. 작성자 id는 내리지 않음. */
+  async listComments(id: string, viewerId?: string) {
+    const trial = await this.prisma.trial.findUnique({
+      where: { id },
+      select: { isPublic: true, userId: true },
+    });
+    const isOwner = !!viewerId && trial?.userId === viewerId;
+    if (!trial || (!trial.isPublic && !isOwner)) {
+      throw new NotFoundException("해당 사건을 찾을 수 없습니다.");
+    }
+    const comments = await this.prisma.trialComment.findMany({
+      where: { trialId: id },
+      orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+      take: 200, // ponytail: 페이지네이션 없음, 판례당 댓글이 수백 개 넘으면 커서 페이지 추가
+      include: { user: { select: { nickname: true, avatar: true } } },
+    });
+    return comments.map((c) => this.toCommentView(c, viewerId, isOwner));
+  }
+
+  /** 댓글 작성 (로그인·공개 판례만). */
+  async createComment(id: string, userId: string, content: string) {
+    const text = content.trim();
+    if (!text) throw new BadRequestException("댓글을 입력해주세요.");
+    const trial = await this.prisma.trial.findUnique({
+      where: { id },
+      select: { isPublic: true, userId: true },
+    });
+    if (!trial) throw new NotFoundException("해당 사건을 찾을 수 없습니다.");
+    if (!trial.isPublic) {
+      throw new BadRequestException("공개된 판례에만 댓글을 달 수 있습니다.");
+    }
+    const [comment] = await this.prisma.$transaction([
+      this.prisma.trialComment.create({
+        data: { trialId: id, userId, content: text },
+        include: { user: { select: { nickname: true, avatar: true } } },
+      }),
+      this.prisma.trial.update({
+        where: { id },
+        data: { commentCount: { increment: 1 } },
+      }),
+    ]);
+    return this.toCommentView(comment, userId, trial.userId === userId);
+  }
+
+  /** 댓글 삭제 — 작성자 본인 또는 판례 주인. */
+  async deleteComment(id: string, commentId: string, userId: string) {
+    const comment = await this.prisma.trialComment.findUnique({
+      where: { id: commentId },
+      select: { trialId: true, userId: true, trial: { select: { userId: true } } },
+    });
+    if (!comment || comment.trialId !== id) {
+      throw new NotFoundException("해당 댓글을 찾을 수 없습니다.");
+    }
+    if (comment.userId !== userId && comment.trial.userId !== userId) {
+      throw new ForbiddenException("본인 댓글이나 내 판례의 댓글만 삭제할 수 있습니다.");
+    }
+    await this.prisma.$transaction([
+      this.prisma.trialComment.delete({ where: { id: commentId } }),
+      this.prisma.trial.update({
+        where: { id },
+        data: { commentCount: { decrement: 1 } },
+      }),
+    ]);
+    return { id: commentId };
+  }
+
+  private toCommentView(
+    c: {
+      id: string;
+      userId: string;
+      content: string;
+      createdAt: Date;
+      user: { nickname: string; avatar: string | null };
+    },
+    viewerId: string | undefined,
+    viewerOwnsTrial: boolean,
+  ) {
+    const mine = !!viewerId && c.userId === viewerId;
+    return {
+      id: c.id,
+      content: c.content,
+      createdAt: c.createdAt,
+      authorNickname: c.user.nickname,
+      authorAvatarUrl: avatarUrl(
+        this.config.get<string>("S3_PUBLIC_BASE_URL") ?? "",
+        c.user.avatar,
+      ),
+      mine,
+      canDelete: mine || viewerOwnsTrial,
+    };
   }
 
   /** 공감 토글 (유저당 판례 1회). 반환: 현재 공감 상태·총 공감 수. */
